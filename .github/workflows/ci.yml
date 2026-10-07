@@ -53,6 +53,9 @@ jobs:
         run: |
           cp mediguide.py build/
           cp requirements.txt build/
+          cp -r ai build/
+          cp -r risk build/
+          cp -r human_review build/
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
