@@ -17,7 +17,19 @@ def summarize_medical_info(extracted_info: dict) -> str:
     if medications:
         summary_parts.append(f"Mentioned medications: {', '.join(medications)}.")
         
-    if not symptoms and not medications:
-        summary_parts.append("Information appears incomplete or no specific symptoms/medications were detected.")
+    test_names = extracted_info.get("test_names", [])
+    if test_names:
+        summary_parts.append(f"Tests mentioned: {', '.join(test_names)}.")
+        
+    dates = extracted_info.get("dates", [])
+    if dates:
+        summary_parts.append(f"Dates found: {', '.join(dates)}.")
+        
+    obs = extracted_info.get("observations", [])
+    if obs:
+        summary_parts.append(f"Observations: {', '.join(obs)}.")
+        
+    if not any([symptoms, medications, test_names, dates, obs]):
+        summary_parts.append("Information appears incomplete or no specific medical data was detected.")
         
     return " ".join(summary_parts)

@@ -16,18 +16,26 @@ def test_document_processor():
     assert process_document("") == ""
 
 def test_medical_extractor():
-    res = extract_medical_info("Patient has a fever and headache, taking aspirin.")
+    text = "Patient has a fever and headache, taking aspirin. Blood pressure was 120/80 mmHg on Oct 12. It was noted that patient was tired."
+    res = extract_medical_info(text)
     assert "fever" in res["symptoms"]
     assert "headache" in res["symptoms"]
     assert "aspirin" in res["medications"]
+    assert "blood pressure" in res["test_names"]
+    assert "120/80" in res["test_values"]
+    assert "mmhg" in res["units"]
+    assert "oct 12" in res["dates"]
+    assert any("noted" in obs.lower() for obs in res["observations"])
     
     empty_res = extract_medical_info("")
     assert empty_res["symptoms"] == []
 
 def test_summarizer():
-    res = extract_medical_info("fever")
+    res = extract_medical_info("fever and blood pressure on Oct 12")
     summary = summarize_medical_info(res)
     assert "fever" in summary
+    assert "blood pressure" in summary
+    assert "oct 12" in summary
     assert "not a diagnosis" in summary
 
 def test_translator():
