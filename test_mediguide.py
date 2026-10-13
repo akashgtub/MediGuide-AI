@@ -1,5 +1,9 @@
+import os
+import tempfile
+from PIL import Image, ImageDraw
+
 from mediguide import welcome_message
-from ai.document_processor import process_document
+from ai.document_processor import process_document, extract_text_from_document
 from ai.medical_extractor import extract_medical_info
 from ai.summarizer import summarize_medical_info
 from ai.translator import translate_text
@@ -72,20 +76,61 @@ def test_patient_agent():
     assert res_high["review_request"]["risk_level"] == "HIGH"
     assert "Please seek professional" in res_high["guidance"][0]
 
-from ai.document_processor import extract_text_from_document
-import os
+def _ensure_synthetic_report(path: str = "synthetic_report.png") -> str:
+    if not os.path.exists(path):
+        img = Image.new("RGB", (700, 350), color=(255, 255, 255))
+        draw = ImageDraw.Draw(img)
+        lines = [
+            "MediGuide AI Demo Medical Report",
+            "Patient ID: DEMO001",
+            "Date: 07 October 2026",
+            "Blood Pressure: 130/85 mmHg",
+            "Hemoglobin: 12.5 g/dL",
+            "Reported observation:",
+            "Patient reports fatigue for three days.",
+            "Medications mentioned:",
+            "None listed.",
+        ]
+        y = 20
+        for line in lines:
+            draw.text((20, y), line, fill=(0, 0, 0))
+            y += 30
+        img.save(path)
+    return path
 
 def test_document_processor_ocr():
-    # Use the synthetic image we just generated
-    img_path = 'synthetic_report.png'
-    if os.path.exists(img_path):
-        text = extract_text_from_document(img_path)
-        text_lower = text.lower()
-        
-        assert 'patient id' in text_lower
-        assert 'blood pressure' in text_lower
-        assert 'hemoglobin' in text_lower
-        assert 'fatigue' in text_lower
-        
-        # Test missing file safely
-        assert extract_text_from_document('non_existent.png') == ''
+    # Use synthetic demo medical report
+    img_path = _ensure_synthetic_report("synthetic_report.png")
+    assert os.path.exists(img_path)
+
+    text = extract_text_from_document(img_path)
+    text_normalized = " ".join(text.lower().split())
+
+    # Verify extracted medical report contents
+    assert "patient id" in text_normalized
+    assert "blood pressure" in text_normalized
+    assert "hemoglobin" in text_normalized
+    assert "fatigue" in text_normalized
+
+    # Verify missing file safely
+    assert extract_text_from_document("non_existent_file.png") == ""
+    assert extract_text_from_document("") == ""
+
+    # Verify empty document safely
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as empty_file:
+        empty_path = empty_file.name
+    try:
+        assert extract_text_from_document(empty_path) == ""
+    finally:
+        if os.path.exists(empty_path):
+            os.remove(empty_path)
+
+    # Verify unsupported file format safely
+    with tempfile.NamedTemporaryFile(suffix=".unsupported", delete=False) as unsup_file:
+        unsup_file.write(b"unsupported content")
+        unsup_path = unsup_file.name
+    try:
+        assert extract_text_from_document(unsup_path) == ""
+    finally:
+        if os.path.exists(unsup_path):
+            os.remove(unsup_path)
