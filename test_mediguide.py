@@ -219,3 +219,127 @@ def test_medical_extractor_distinguishes_inferred_from_extracted():
     assert "g/dl" in res["units"]
     assert any("october" in d for d in res["dates"])
     assert "fatigue" in res["symptoms"]
+
+def test_medication_extraction_regression():
+    """
+    Regression test for Problem 1:
+    - Input: 'Medications mentioned: None listed.' -> expected empty medication list.
+    - Section headings like 'Medications mentioned:' must not be treated as medication entities.
+    - Negative medication expressions (e.g., 'None listed', 'None', 'Prescriptions: None')
+      must result in an empty medications list.
+    """
+    # 1. Negative statement with heading
+    res_none = extract_medical_info("Medications mentioned: None listed.")
+    assert res_none["medications"] == []
+    # Section headings must not be treated as medication entities
+    assert not any(ent["label"] == "Medication" for ent in res_none["entities"])
+
+    # 2. Additional negative phrasing variations
+    res_none_simple = extract_medical_info("Medications: None.")
+    assert res_none_simple["medications"] == []
+
+    res_denies = extract_medical_info("Patient denies medications.")
+    assert res_denies["medications"] == []
+
+    # 3. Positive contrast to ensure legitimate medications are still recognized
+    res_positive = extract_medical_info("Medications: Aspirin 81 mg daily.")
+    assert "aspirin" in res_positive["medications"]
+    assert "medications" not in res_positive["medications"]
+
+def test_test_name_extraction_regression():
+    """
+    Regression test for Problem 2:
+    - Must NOT return 'med' as a test name.
+    - Preserve complete, meaningful names such as 'Blood Pressure' and 'Hemoglobin'.
+    - Keep model-recognized entities separate from deterministically parsed test names.
+    """
+    text = (
+        "MediGuide AI Demo Medical Report. "
+        "Blood Pressure: 130/85 mmHg. "
+        "Hemoglobin: 12.5 g/dL."
+    )
+    res = extract_medical_info(text)
+
+    # Must NOT return 'med' as a test name
+    assert "med" not in res["test_names"]
+
+    # Preserve complete, meaningful names
+    assert "blood pressure" in res["test_names"]
+    assert "hemoglobin" in res["test_names"]
+
+    # Model-recognized entities are kept separate in 'entities'
+    # and not conflated into 'test_names'
+    assert isinstance(res["entities"], list)
+    for ent in res["entities"]:
+        assert ent["source"] == "ner_model"
+        # Spurious 'med' subword token is not an entity
+        assert ent["text"].lower() != "med"
+
+def test_observation_extraction_regression():
+    """
+    Regression test for Problem 3:
+    - For text 'Hemoglobin: 12.5 g/dL. Reported observation: Patient reports fatigue for three days.',
+      do not include '12.5 g/dL' inside the observation.
+    - Extract observation text separately while preserving exact source wording.
+    """
+    text = "Hemoglobin: 12.5 g/dL. Reported observation: Patient reports fatigue for three days."
+    res = extract_medical_info(text)
+
+    assert len(res["observations"]) == 1
+    obs = res["observations"][0]
+
+    # Must not contain measurement values or units
+    assert "12.5" not in obs
+    assert "g/dl" not in obs.lower()
+    assert "hemoglobin" not in obs.lower()
+
+    # Preserves exact source wording
+    assert obs == "Patient reports fatigue for three days."
+
+def test_synthetic_report_structured_output_quality():
+    """
+    Regression test for full synthetic medical report structured output.
+    Verifies actual structured dictionary content and source fidelity:
+    - Medication list is empty (negative statement handled properly)
+    - Test names contain complete names ('blood pressure', 'hemoglobin') and no 'med'
+    - Observations isolate narrative wording without measurement numbers or units
+    - Original numeric values and units are faithfully preserved
+    - Dates are preserved
+    - Inferred info remains empty (no diagnosis or invented data)
+    """
+    synthetic_report_text = (
+        "MediGuide AI Demo Medical Report\n"
+        "Patient ID: DEMO001\n"
+        "Date: 07 October 2026\n"
+        "Blood Pressure: 130/85 mmHg\n"
+        "Hemoglobin: 12.5 g/dL\n"
+        "Reported observation:\n"
+        "Patient reports fatigue for three days.\n"
+        "Medications mentioned:\n"
+        "None listed."
+    )
+    res = extract_medical_info(synthetic_report_text)
+
+    # 1. Medications: empty, no headings as medications
+    assert res["medications"] == []
+    assert not any(ent["label"] == "Medication" for ent in res["entities"])
+
+    # 2. Test names: no 'med', meaningful complete names preserved
+    assert "med" not in res["test_names"]
+    assert "blood pressure" in res["test_names"]
+    assert "hemoglobin" in res["test_names"]
+
+    # 3. Observation: clean narrative without measurement values
+    assert res["observations"] == ["Patient reports fatigue for three days."]
+    assert not any("12.5" in o for o in res["observations"])
+    assert not any("g/dl" in o.lower() for o in res["observations"])
+
+    # 4. Source fidelity: preserved numeric values, units, and dates
+    assert res["test_values"] == ["130/85", "12.5"]
+    assert res["units"] == ["mmhg", "g/dl"]
+    assert any("07 october 2026" in d or "october" in d for d in res["dates"])
+    assert res["symptoms"] == ["fatigue"]
+
+    # 5. Inferred info: strictly empty (no diagnostic assumption)
+    assert res["inferred_info"] == []
+
