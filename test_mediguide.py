@@ -71,3 +71,21 @@ def test_patient_agent():
     assert res_high["review_request"] is not None
     assert res_high["review_request"]["risk_level"] == "HIGH"
     assert "Please seek professional" in res_high["guidance"][0]
+
+from ai.document_processor import extract_text_from_document
+import os
+
+def test_document_processor_ocr():
+    # Use the synthetic image we just generated
+    img_path = 'synthetic_report.png'
+    if os.path.exists(img_path):
+        text = extract_text_from_document(img_path)
+        text_lower = text.lower()
+        
+        assert 'patient id' in text_lower
+        assert 'blood pressure' in text_lower
+        assert 'hemoglobin' in text_lower
+        assert 'fatigue' in text_lower
+        
+        # Test missing file safely
+        assert extract_text_from_document('non_existent.png') == ''
