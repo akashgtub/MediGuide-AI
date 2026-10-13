@@ -4,7 +4,13 @@ from PIL import Image, ImageDraw
 
 from mediguide import welcome_message
 from ai.document_processor import process_document, extract_text_from_document
-from ai.medical_extractor import extract_medical_info
+from ai.medical_extractor import (
+    extract_medical_info,
+    extract_biomedical_entities,
+    get_ner_pipeline,
+    NER_MODEL_NAME,
+    SUPPORTED_NER_CATEGORIES,
+)
 from ai.summarizer import summarize_medical_info
 from ai.translator import translate_text
 from risk.risk_engine import evaluate_risk
@@ -134,3 +140,82 @@ def test_document_processor_ocr():
     finally:
         if os.path.exists(unsup_path):
             os.remove(unsup_path)
+
+def test_biomedical_ner_entities():
+    # Test biomedical entity recognition on synthetic clinical text
+    synthetic_text = "Patient reports fatigue and fever for three days, taking aspirin. Blood pressure was measured."
+    entities = extract_biomedical_entities(synthetic_text)
+    
+    assert isinstance(entities, list)
+    assert len(entities) > 0
+
+    # Verify entity structure, source attribution, and exact span slicing
+    labels_found = set()
+    for ent in entities:
+        assert "text" in ent
+        assert "label" in ent
+        assert "start" in ent
+        assert "end" in ent
+        assert "confidence" in ent
+        assert ent["source"] == "ner_model"
+        # Verify exact slice from original source text
+        assert synthetic_text[ent["start"]:ent["end"]] == ent["text"]
+        assert ent["label"] in SUPPORTED_NER_CATEGORIES
+        labels_found.add(ent["label"])
+
+    # Model should recognize symptoms such as fatigue or fever
+    entity_texts = [e["text"].lower() for e in entities]
+    assert any("fatigue" in t or "fever" in t for t in entity_texts)
+    assert "Sign_symptom" in labels_found or "Disease_disorder" in labels_found
+
+def test_biomedical_ner_edge_cases():
+    # 1. Empty input
+    assert extract_biomedical_entities("") == []
+    assert extract_biomedical_entities("   ") == []
+    assert extract_biomedical_entities(None) == []
+
+    # 2. Long document safety (chunking at boundaries)
+    long_synthetic_doc = "Patient reports mild fatigue and headaches. " * 50
+    long_entities = extract_biomedical_entities(long_synthetic_doc)
+    assert isinstance(long_entities, list)
+    assert len(long_entities) > 0
+    # Check that character offsets are valid within long text
+    for ent in long_entities:
+        assert long_synthetic_doc[ent["start"]:ent["end"]] == ent["text"]
+
+    # 3. Model failure simulation (graceful fallback)
+    import ai.medical_extractor as me
+    original_pipeline = me._ner_pipeline
+    try:
+        # Simulate uninitialized/failing pipeline
+        me._ner_pipeline = None
+        def mock_get_none():
+            return None
+        me.get_ner_pipeline = mock_get_none
+        assert me.extract_biomedical_entities("Patient has a fever") == []
+        # extract_medical_info should still work safely via deterministic fallback
+        fallback_res = me.extract_medical_info("Patient has a fever and headache, taking aspirin.")
+        assert "fever" in fallback_res["symptoms"]
+        assert "headache" in fallback_res["symptoms"]
+        assert "aspirin" in fallback_res["medications"]
+        assert fallback_res["entities"] == []
+    finally:
+        me._ner_pipeline = original_pipeline
+        me.get_ner_pipeline = get_ner_pipeline
+
+def test_medical_extractor_distinguishes_inferred_from_extracted():
+    text = "Date: 07 October 2026. Blood Pressure: 130/85 mmHg. Hemoglobin: 12.5 g/dL. Patient reports fatigue. Medications: None listed."
+    res = extract_medical_info(text)
+
+    # Distinguishes extracted entities from inferred info
+    assert "entities" in res
+    assert "inferred_info" in res
+    assert res["inferred_info"] == []  # No inferred diagnoses or prescriptions
+
+    # Verify deterministic parsing of values and units
+    assert "130/85" in res["test_values"]
+    assert "12.5" in res["test_values"]
+    assert "mmhg" in res["units"]
+    assert "g/dl" in res["units"]
+    assert any("october" in d for d in res["dates"])
+    assert "fatigue" in res["symptoms"]

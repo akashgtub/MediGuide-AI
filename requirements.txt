@@ -2,3 +2,5 @@ pytest
 paddlepaddle
 paddleocr
 numpy<2.0.0
+transformers
+torch

@@ -4,6 +4,8 @@ from typing import List, Any
 
 # Disable network connectivity check to model hosters to prevent timeouts
 os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
+# Prevent OpenMP runtime conflict when both Paddle and PyTorch are loaded on Windows
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 # Supported file extensions for document OCR
 SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".pdf", ".bmp", ".tiff"}
