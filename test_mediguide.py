@@ -11,7 +11,15 @@ from ai.medical_extractor import (
     NER_MODEL_NAME,
     SUPPORTED_NER_CATEGORIES,
 )
-from ai.summarizer import summarize_medical_info
+from ai.summarizer import (
+    summarize_medical_info,
+    get_summarization_pipeline,
+    SUMMARIZATION_MODEL_NAME,
+    SUMMARIZATION_MODEL_LICENSE,
+    _chunk_text,
+    _verify_neural_summary,
+    _generate_deterministic_summary,
+)
 from ai.translator import translate_text
 from risk.risk_engine import evaluate_risk
 from human_review.review_manager import create_review_request
