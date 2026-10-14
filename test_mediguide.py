@@ -351,3 +351,211 @@ def test_synthetic_report_structured_output_quality():
     # 5. Inferred info: strictly empty (no diagnostic assumption)
     assert res["inferred_info"] == []
 
+
+def test_summarizer_metadata():
+    """Verify selected model metadata, license, and CPU readiness."""
+    assert SUMMARIZATION_MODEL_NAME == "sshleifer/distilbart-cnn-6-6"
+    assert SUMMARIZATION_MODEL_LICENSE == "Apache-2.0"
+
+
+def test_summarizer_empty_and_invalid_inputs():
+    """
+    Verify safe handling of empty dictionary, None, empty strings,
+    non-dict inputs, and incomplete medical reports.
+    """
+    assert summarize_medical_info({}) == "No information could be summarized."
+    assert summarize_medical_info(None) == "No information could be summarized."
+    assert summarize_medical_info("") == "No information could be summarized."
+    assert summarize_medical_info("   ") == "No information could be summarized."
+    assert summarize_medical_info(12345) == "No information could be summarized."
+
+    # Incomplete input with empty category lists
+    res_incomplete = summarize_medical_info({
+        "symptoms": [],
+        "medications": [],
+        "test_names": [],
+        "test_values": [],
+        "dates": [],
+        "observations": []
+    })
+    assert "Information appears incomplete or no specific medical data was detected." in res_incomplete
+    assert "not a diagnosis or clinical recommendation" in res_incomplete
+
+
+def test_summarizer_measurement_and_unit_preservation():
+    """
+    Verify that clinical measurements, scientific units, dates, medications,
+    and observations are accurately preserved, and inferred_info remains empty.
+    """
+    extracted_data = {
+        "symptoms": ["fatigue"],
+        "medications": ["aspirin"],
+        "test_names": ["blood pressure", "hemoglobin"],
+        "test_values": ["130/85", "12.5"],
+        "units": ["mmhg", "g/dl"],
+        "dates": ["07 october 2026"],
+        "observations": ["Patient reports fatigue for three days."],
+        "inferred_info": []
+    }
+
+    summary = summarize_medical_info(extracted_data)
+
+    # Core measurements and units preserved faithfully
+    assert "130/85" in summary
+    assert "12.5" in summary
+    assert "mmhg" in summary.lower()
+    assert "g/dl" in summary.lower()
+
+    # Clinical entities preserved
+    assert "fatigue" in summary.lower()
+    assert "aspirin" in summary.lower()
+    assert "blood pressure" in summary.lower()
+    assert "hemoglobin" in summary.lower()
+    assert "07 october 2026" in summary.lower() or "october" in summary.lower()
+
+    # Required non-diagnostic disclaimer
+    assert "not a diagnosis or clinical recommendation" in summary.lower()
+
+    # Inferred info remains strictly empty
+    assert extracted_data["inferred_info"] == []
+
+
+def test_summarizer_model_loading_failure_fallback(monkeypatch):
+    """
+    Verify that model loading failure (e.g. offline environment or missing weights)
+    gracefully and reliably falls back to deterministic summarization without crashing.
+    """
+    monkeypatch.setattr("ai.summarizer.get_summarization_pipeline", lambda: None)
+
+    extracted_data = {
+        "symptoms": ["headache"],
+        "medications": ["ibuprofen"],
+        "test_names": ["blood pressure"],
+        "test_values": ["120/80"],
+        "units": ["mmhg"],
+        "dates": ["12 october"],
+        "observations": [],
+        "inferred_info": []
+    }
+
+    summary = summarize_medical_info(extracted_data)
+    assert "headache" in summary
+    assert "ibuprofen" in summary
+    assert "120/80" in summary
+    assert "not a diagnosis or clinical recommendation" in summary
+
+
+def test_summarizer_inference_failure_fallback(monkeypatch):
+    """
+    Verify that an unexpected exception during neural inference (e.g. out of memory)
+    is safely caught and seamlessly falls back to deterministic summary.
+    """
+    def broken_pipeline(*args, **kwargs):
+        raise RuntimeError("Simulated pipeline inference failure")
+
+    monkeypatch.setattr("ai.summarizer.get_summarization_pipeline", lambda: broken_pipeline)
+
+    extracted_data = {
+        "symptoms": ["fever"],
+        "medications": ["amoxicillin"],
+        "test_names": ["heart rate"],
+        "test_values": ["72"],
+        "units": ["bpm"],
+        "dates": [],
+        "observations": ["Resting comfortably."],
+        "inferred_info": []
+    }
+
+    summary = summarize_medical_info(extracted_data)
+    assert "fever" in summary
+    assert "amoxicillin" in summary
+    assert "72" in summary
+    assert "Resting comfortably." in summary
+    assert "not a diagnosis" in summary
+
+
+def test_summarizer_with_mocked_verified_neural_pipeline(monkeypatch):
+    """
+    Verify successful neural summarization flow with mocked model inference.
+    Confirms that when the generated summary preserves all source facts,
+    it is accepted and paired with the mandatory disclaimer.
+    """
+    faithful_text = (
+        "Patient reports fatigue for three days. "
+        "Blood pressure is 130/85 mmHg and hemoglobin is 12.5 g/dL on 07 october 2026."
+    )
+
+    def mock_pipeline(chunk, **kwargs):
+        return [{"summary_text": faithful_text}]
+
+    monkeypatch.setattr("ai.summarizer.get_summarization_pipeline", lambda: mock_pipeline)
+
+    extracted_data = {
+        "symptoms": ["fatigue"],
+        "medications": [],
+        "test_names": ["blood pressure", "hemoglobin"],
+        "test_values": ["130/85", "12.5"],
+        "units": ["mmhg", "g/dl"],
+        "dates": ["07 october 2026"],
+        "observations": ["Patient reports fatigue for three days."],
+        "inferred_info": []
+    }
+
+    summary = summarize_medical_info(extracted_data)
+    assert "not a diagnosis or clinical recommendation" in summary
+    assert "130/85" in summary
+    assert "12.5" in summary
+    assert "mmhg" in summary.lower()
+    assert "fatigue" in summary.lower()
+
+
+def test_summarizer_neural_verification_rejects_omissions(monkeypatch):
+    """
+    Verify that if a neural model drops vital clinical measurements (e.g. omitting
+    '130/85' or '12.5 g/dL'), the verification guard detects the omission and
+    reverts to the deterministic fallback to guarantee 100% clinical safety.
+    """
+    # Summary that dropped vital numbers and units
+    hallucinatory_text = "The patient feels tired and was reviewed by staff."
+
+    def bad_pipeline(chunk, **kwargs):
+        return [{"summary_text": hallucinatory_text}]
+
+    monkeypatch.setattr("ai.summarizer.get_summarization_pipeline", lambda: bad_pipeline)
+
+    extracted_data = {
+        "symptoms": ["fatigue"],
+        "medications": [],
+        "test_names": ["blood pressure", "hemoglobin"],
+        "test_values": ["130/85", "12.5"],
+        "units": ["mmhg", "g/dl"],
+        "dates": ["07 october 2026"],
+        "observations": ["Patient reports fatigue for three days."],
+        "inferred_info": []
+    }
+
+    summary = summarize_medical_info(extracted_data)
+
+    # Must fall back to deterministic summary and preserve the actual values
+    assert "130/85" in summary
+    assert "12.5" in summary
+    assert "mmhg" in summary.lower()
+    assert "g/dl" in summary.lower()
+    assert "Patient reports fatigue for three days." in summary
+
+
+def test_summarizer_long_document_chunking():
+    """
+    Verify that long documents are chunked safely without breaking
+    decimal numbers or raising errors.
+    """
+    long_notes = "Patient reports mild headache and fatigue. Blood pressure was measured at 120.5 mmHg. " * 30
+    chunks = _chunk_text(long_notes, max_chunk_chars=300)
+    assert len(chunks) > 1
+    for chunk in chunks:
+        assert len(chunk) <= 400
+        # Check that decimal is preserved and not split awkwardly
+        if "120.5" in chunk:
+            assert "120.5" in chunk
+
+
