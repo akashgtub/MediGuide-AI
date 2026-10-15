@@ -1,14 +1,28 @@
 import { useEffect, useState } from 'react';
 import { useParams, useLocation, Link } from 'react-router-dom';
-import { ShieldAlert, CheckCircle, ArrowLeft, FileText, AlertTriangle, Info, Eye } from 'lucide-react';
+import { ShieldAlert, CheckCircle, ArrowLeft, FileText, AlertTriangle, Info, Eye, Globe, Loader2 } from 'lucide-react';
+import { apiFetch } from '../../context/AuthContext';
+import { useLanguage } from '../../context/LanguageContext';
+import { SUPPORTED_LANGUAGES } from '../../i18n/translations';
 
 const ReportAnalysis = () => {
   const { id } = useParams();
   const location = useLocation();
+  const { language, t } = useLanguage();
 
   const [report, setReport] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [showRawText, setShowRawText] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [explanationLang, setExplanationLang] = useState(language || 'en');
+  const [isTranslating, setIsTranslating] = useState(false);
+
+  // Sync explanation language when global language changes
+  useEffect(() => {
+    if (language) {
+      setExplanationLang(language);
+    }
+  }, [language]);
 
   useEffect(() => {
     // 1. Check React Router navigation state
@@ -31,12 +45,78 @@ const ReportAnalysis = () => {
           if (cachedPreview) {
             setPreviewUrl(cachedPreview);
           }
+          return;
         } catch {
-          setReport(null);
+          // fallback to backend
         }
       }
+
+      // 3. Fallback: Query backend SQLite persistence
+      setIsLoading(true);
+      apiFetch(`/api/reports/${id}?lang=${explanationLang}`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data) {
+            setReport({
+              report_id: data.id,
+              filename: data.filename,
+              summary: data.summary,
+              guidance: data.guidance || [],
+              risk_assessment: {
+                risk_level: data.risk_level,
+                is_high_risk: data.is_high_risk,
+                reasons: data.risk_reasons || [],
+              },
+              extracted_info: {
+                symptoms: (data.entities || []).filter((e) => e.label === 'Symptom').map((e) => e.word),
+                medications: (data.entities || []).filter((e) => e.label === 'Medication').map((e) => e.word),
+                test_names: (data.measurements || []).map((m) => m.test_name),
+                test_values: (data.measurements || []).map((m) => m.value),
+                units: (data.measurements || []).map((m) => m.unit),
+                observations: (data.entities || []).filter((e) => !['Symptom', 'Medication'].includes(e.label)).map((e) => e.word),
+              },
+              timings: data.timings || {},
+              disclaimer: data.disclaimer || "MediGuide AI is an educational informational aid and is NOT a substitute for professional medical advice, clinical diagnosis, or treatment. Always consult a qualified physician.",
+            });
+          }
+        })
+        .catch((e) => console.warn('Could not fetch report from backend:', e))
+        .finally(() => setIsLoading(false));
     }
   }, [id, location.state]);
+
+  // Translate summary and guidance when explanationLang changes
+  useEffect(() => {
+    if (!report?.report_id) return;
+
+    let isMounted = true;
+    setIsTranslating(true);
+
+    apiFetch(`/api/reports/${report.report_id}/translate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_language: explanationLang }),
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data && isMounted) {
+          setReport((prev) => ({
+            ...prev,
+            summary: data.summary || prev.summary,
+            guidance: data.guidance || prev.guidance,
+            disclaimer: data.disclaimer || prev.disclaimer,
+          }));
+        }
+      })
+      .catch((e) => console.warn('Translation request failed:', e))
+      .finally(() => {
+        if (isMounted) setIsTranslating(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [explanationLang, report?.report_id]);
 
   if (!report) {
     return (
@@ -86,7 +166,7 @@ const ReportAnalysis = () => {
         <div>
           <div className="flex items-center space-x-2">
             <Link to="/patient/upload" className="text-slate-400 hover:text-slate-600 text-sm flex items-center">
-              <ArrowLeft className="w-4 h-4 mr-1" /> Back
+              <ArrowLeft className="w-4 h-4 mr-1" /> {t('report.back')}
             </Link>
             <span className="text-slate-300">•</span>
             <span className="text-xs font-mono bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
@@ -99,7 +179,7 @@ const ReportAnalysis = () => {
               <span className="text-xs text-slate-400 font-mono">[{report.timings.total_seconds}s]</span>
             )}
           </div>
-          <h1 className="text-2xl font-bold text-slate-800 mt-1">Report Analysis</h1>
+          <h1 className="text-2xl font-bold text-slate-800 mt-1">{t('report.title')}</h1>
         </div>
 
         {/* Dynamic Risk Badge */}
@@ -107,17 +187,17 @@ const ReportAnalysis = () => {
           {isHighRisk ? (
             <span className="bg-red-100 text-red-800 border border-red-200 px-3 py-1 rounded-full text-xs sm:text-sm font-semibold flex items-center shadow-sm">
               <ShieldAlert className="w-4 h-4 mr-1.5 text-red-600" />
-              High Risk — Clinical Review Escalated
+              {t('report.riskHigh')}
             </span>
           ) : isUncertain ? (
             <span className="bg-amber-100 text-amber-800 border border-amber-200 px-3 py-1 rounded-full text-xs sm:text-sm font-semibold flex items-center shadow-sm">
               <AlertTriangle className="w-4 h-4 mr-1.5 text-amber-600" />
-              Additional Professional Review Recommended
+              {t('report.riskUncertain')}
             </span>
           ) : (
             <span className="bg-emerald-100 text-emerald-800 border border-emerald-200 px-3 py-1 rounded-full text-xs sm:text-sm font-semibold flex items-center shadow-sm">
               <CheckCircle className="w-4 h-4 mr-1.5 text-emerald-600" />
-              Standard Report — Normal Routing
+              {t('report.riskStandard')}
             </span>
           )}
         </div>
@@ -129,14 +209,14 @@ const ReportAnalysis = () => {
         <div className="bg-slate-100 rounded-xl border border-slate-200 p-4 flex flex-col min-h-[480px]">
           <div className="flex justify-between items-center mb-3">
             <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
-              {showRawText ? 'Extracted OCR Text' : 'Original Document'}
+              {showRawText ? t('report.ocrText') : t('report.originalDoc')}
             </span>
             <button
               onClick={() => setShowRawText(!showRawText)}
               className="text-xs font-medium text-teal-700 bg-white border border-slate-300 hover:bg-slate-50 px-2.5 py-1 rounded-md flex items-center space-x-1 shadow-2xs"
             >
               <Eye className="w-3.5 h-3.5 mr-1" />
-              <span>{showRawText ? 'Show Visual' : 'View OCR Text'}</span>
+              <span>{showRawText ? t('report.showVisual') : t('report.viewOcrText')}</span>
             </button>
           </div>
 
@@ -165,12 +245,46 @@ const ReportAnalysis = () => {
 
         {/* Right Column: Structured AI Findings */}
         <div className="bg-white rounded-xl shadow-xs border border-slate-100 p-6 overflow-y-auto space-y-6">
-          <h2 className="text-lg font-bold text-slate-800">Information Identified from Report</h2>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-2 border-b border-slate-100">
+            <h2 className="text-lg font-bold text-slate-800">{t('report.findingsTitle')}</h2>
 
-          {/* Simple Summary */}
+            {/* Explanation Language Selector */}
+            <div className="flex items-center space-x-1.5 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl">
+              <Globe className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+              <span className="text-xs text-slate-500 font-medium">{t('report.languageSelectorLabel')}</span>
+              <select
+                value={explanationLang}
+                onChange={(e) => setExplanationLang(e.target.value)}
+                className="text-xs bg-transparent text-slate-700 outline-none font-semibold cursor-pointer"
+              >
+                {SUPPORTED_LANGUAGES.map((l) => (
+                  <option key={l.code} value={l.code}>
+                    {l.nativeName} ({l.name})
+                  </option>
+                ))}
+              </select>
+              {isTranslating && <Loader2 className="w-3.5 h-3.5 text-teal-600 animate-spin" />}
+            </div>
+          </div>
+
+          {/* Safe metrics notice banner */}
+          <div className="text-[11px] bg-teal-50/70 border border-teal-100 text-teal-800 px-3 py-1.5 rounded-lg flex items-center space-x-1.5">
+            <Info className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+            <span>{t('report.originalNotice')}</span>
+          </div>
+
+          {/* Patient-Friendly Summary */}
           <div className="bg-teal-50/50 p-4 rounded-xl border border-teal-100">
-            <h3 className="font-bold text-teal-900 text-sm mb-1.5 flex items-center">
-              <Info className="w-4 h-4 mr-1.5 text-teal-600" /> Patient-Friendly Summary
+            <h3 className="font-bold text-teal-900 text-sm mb-1.5 flex items-center justify-between">
+              <span className="flex items-center">
+                <Info className="w-4 h-4 mr-1.5 text-teal-600" /> {t('report.summaryTitle')}
+              </span>
+              {isTranslating && (
+                <span className="text-xs text-teal-600 flex items-center font-normal">
+                  <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                  {t('report.translating')}
+                </span>
+              )}
             </h3>
             <p className="text-slate-700 text-sm leading-relaxed">
               {summary || 'No summary available for this document.'}
@@ -180,32 +294,32 @@ const ReportAnalysis = () => {
           {/* Extracted Clinical Metrics Grid */}
           <div className="grid grid-cols-2 gap-4">
             <div className="border border-slate-100 bg-slate-50/40 rounded-xl p-3.5">
-              <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Reported Symptoms</p>
+              <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">{t('report.symptomsTitle')}</p>
               <p className="font-medium text-slate-800 mt-1 text-sm">
-                {extracted_info?.symptoms?.length ? extracted_info.symptoms.join(', ') : 'None detected'}
+                {extracted_info?.symptoms?.length ? extracted_info.symptoms.join(', ') : t('common.noneDetected')}
               </p>
             </div>
 
             <div className="border border-slate-100 bg-slate-50/40 rounded-xl p-3.5">
-              <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Medications</p>
+              <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">{t('report.medicationsTitle')}</p>
               <p className="font-medium text-slate-800 mt-1 text-sm">
-                {extracted_info?.medications?.length ? extracted_info.medications.join(', ') : 'None listed'}
+                {extracted_info?.medications?.length ? extracted_info.medications.join(', ') : t('common.noneListed')}
               </p>
             </div>
 
             <div className="border border-slate-100 bg-slate-50/40 rounded-xl p-3.5">
-              <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Tests & Measurements</p>
-              <p className="font-medium text-slate-800 mt-1 text-sm">
+              <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">{t('report.testsTitle')}</p>
+              <p className="font-medium text-slate-800 mt-1 text-sm font-mono">
                 {testValuesCombined.length > 0
                   ? testValuesCombined.join(', ')
-                  : (extracted_info?.test_names?.length ? extracted_info.test_names.join(', ') : 'None detected')}
+                  : (extracted_info?.test_names?.length ? extracted_info.test_names.join(', ') : t('common.noneDetected'))}
               </p>
             </div>
 
             <div className="border border-slate-100 bg-slate-50/40 rounded-xl p-3.5">
-              <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Dates Recorded</p>
+              <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">{t('report.datesTitle')}</p>
               <p className="font-medium text-slate-800 mt-1 text-sm">
-                {extracted_info?.dates?.length ? extracted_info.dates.join(', ') : 'None noted'}
+                {extracted_info?.dates?.length ? extracted_info.dates.join(', ') : t('common.noneNoted')}
               </p>
             </div>
           </div>
@@ -213,7 +327,7 @@ const ReportAnalysis = () => {
           {/* Observations */}
           {extracted_info?.observations?.length > 0 && (
             <div className="border border-slate-100 rounded-xl p-3.5 bg-slate-50/30">
-              <p className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">Clinical Observations</p>
+              <p className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">{t('report.observationsTitle')}</p>
               <ul className="text-sm text-slate-700 list-disc pl-5 space-y-1">
                 {extracted_info.observations.map((obs, idx) => (
                   <li key={idx}>{obs}</li>
@@ -225,7 +339,7 @@ const ReportAnalysis = () => {
           {/* Suggested Next Steps / Guidance */}
           <div>
             <h3 className="font-bold text-slate-800 mb-2 flex items-center text-sm">
-              <CheckCircle className="w-4 h-4 text-teal-600 mr-2" /> Suggested Next Steps
+              <CheckCircle className="w-4 h-4 text-teal-600 mr-2" /> {t('report.nextStepsTitle')}
             </h3>
             <ul className="text-sm text-slate-600 space-y-2 pl-6 list-disc">
               {guidance?.length > 0 ? (
@@ -239,7 +353,7 @@ const ReportAnalysis = () => {
           {/* Escalation Reasons if Flagged */}
           {risk_assessment?.reasons?.length > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 text-xs text-amber-800">
-              <p className="font-bold mb-1">Flagged Review Factors:</p>
+              <p className="font-bold mb-1">{t('report.flaggedFactors')}</p>
               <ul className="list-disc pl-4 space-y-0.5">
                 {risk_assessment.reasons.map((r, i) => (
                   <li key={i}>{r}</li>
@@ -250,7 +364,7 @@ const ReportAnalysis = () => {
 
           {/* Mandatory Clinical Disclaimer */}
           <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-500 leading-relaxed">
-            <strong>Clinical Safety Disclaimer:</strong> {disclaimer}
+            <strong>{t('report.disclaimerTitle')}</strong> {disclaimer}
           </div>
         </div>
       </div>

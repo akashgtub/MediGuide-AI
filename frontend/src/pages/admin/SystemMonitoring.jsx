@@ -12,6 +12,7 @@ import {
   Layers,
   Zap,
 } from 'lucide-react';
+import { apiFetch } from '../../context/AuthContext';
 
 const SystemMonitoring = () => {
   const [stats, setStats] = useState(null);
@@ -21,7 +22,7 @@ const SystemMonitoring = () => {
   const fetchStats = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/system/stats');
+      const res = await apiFetch('/api/system/stats');
       if (res.ok) {
         const data = await res.json();
         setStats(data);

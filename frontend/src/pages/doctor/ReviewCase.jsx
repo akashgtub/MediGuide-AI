@@ -12,7 +12,7 @@ import {
   Loader2,
   Calendar,
 } from 'lucide-react';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth, apiFetch } from '../../context/AuthContext';
 
 const ReviewCase = () => {
   const { id } = useParams();
@@ -33,7 +33,7 @@ const ReviewCase = () => {
     const fetchCase = async () => {
       setLoading(true);
       try {
-        const res = await fetch(`/api/reviews/${id}`);
+        const res = await apiFetch(`/api/reviews/${id}`);
         if (res.ok) {
           const data = await res.json();
           setCaseData(data);
@@ -83,7 +83,7 @@ const ReviewCase = () => {
     setSubmitError('');
 
     try {
-      const res = await fetch(`/api/reviews/${id}/decision`, {
+      const res = await apiFetch(`/api/reviews/${id}/decision`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -12,6 +12,7 @@ import {
   ArrowRight,
   RefreshCw,
 } from 'lucide-react';
+import { apiFetch } from '../../context/AuthContext';
 
 const CompletedReviews = () => {
   const [reviews, setReviews] = useState([]);
@@ -22,7 +23,7 @@ const CompletedReviews = () => {
   const fetchCompletedReviews = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/reviews?status=COMPLETED');
+      const res = await apiFetch('/api/reviews?status=COMPLETED');
       if (res.ok) {
         const data = await res.json();
         setReviews(data);

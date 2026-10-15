@@ -1,18 +1,20 @@
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 import { Activity, FileText, Upload, Calendar, Settings, Home, Users, Stethoscope } from 'lucide-react';
 
 const Sidebar = () => {
   const { user } = useAuth();
+  const { t } = useLanguage();
   
   const getLinks = () => {
     if (user?.role === 'patient') {
       return [
-        { name: 'Dashboard', path: '/patient', icon: <Home className="w-5 h-5" /> },
-        { name: 'Upload Report', path: '/patient/upload', icon: <Upload className="w-5 h-5" /> },
-        { name: 'My Reports', path: '/patient/reports', icon: <FileText className="w-5 h-5" /> },
-        { name: 'AI Assistant', path: '/patient/assistant', icon: <Activity className="w-5 h-5" /> },
-        { name: 'Appointment Prep', path: '/patient/appointment', icon: <Calendar className="w-5 h-5" /> }
+        { name: t('nav.dashboard', 'Dashboard'), path: '/patient', icon: <Home className="w-5 h-5" /> },
+        { name: t('nav.uploadReport', 'Upload Report'), path: '/patient/upload', icon: <Upload className="w-5 h-5" /> },
+        { name: t('nav.myReports', 'My Reports'), path: '/patient/reports', icon: <FileText className="w-5 h-5" /> },
+        { name: t('nav.aiAssistant', 'AI Assistant'), path: '/patient/assistant', icon: <Activity className="w-5 h-5" /> },
+        { name: t('nav.appointmentPrep', 'Appointment Prep'), path: '/patient/appointment', icon: <Calendar className="w-5 h-5" /> }
       ];
     }
     if (user?.role === 'doctor') {
@@ -41,16 +43,16 @@ const Sidebar = () => {
       </div>
       <nav className="flex-1 p-4 space-y-1">
         {getLinks().map(link => (
-          <Link key={link.name} to={link.path} className="flex items-center space-x-3 px-3 py-2 rounded-lg text-slate-600 hover:bg-slate-50 hover:text-teal-600 transition-colors">
+          <Link key={link.path} to={link.path} className="flex items-center space-x-3 px-3 py-2 rounded-lg text-slate-600 hover:bg-slate-50 hover:text-teal-600 transition-colors">
             {link.icon}
-            <span className="font-medium">{link.name}</span>
+            <span className="font-medium text-sm">{link.name}</span>
           </Link>
         ))}
       </nav>
       <div className="p-4 border-t border-slate-100">
         <Link to="#" className="flex items-center space-x-3 px-3 py-2 rounded-lg text-slate-600 hover:bg-slate-50 transition-colors">
           <Settings className="w-5 h-5" />
-          <span className="font-medium">Settings</span>
+          <span className="font-medium text-sm">{user?.role === 'patient' ? t('nav.settings', 'Settings') : 'Settings'}</span>
         </Link>
       </div>
     </div>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   CheckCircle,
   FileText,
@@ -11,26 +11,31 @@ import {
   Clock,
   Sparkles,
 } from 'lucide-react';
-
-const defaultQuestions = [
-  { id: '1', text: 'Are my blood pressure readings of 130/85 mmHg within an acceptable target range?', checked: false },
-  { id: '2', text: 'Could my severe headaches and nausea be side effects of ibuprofen or related to blood pressure?', checked: false },
-  { id: '3', text: 'What lifestyle adjustments or diagnostic follow-ups do you recommend for the reported fatigue?', checked: false },
-];
-
-const defaultDocs = [
-  { id: 'd1', text: 'Recent Diagnostic Lab Report (PDF / hardcopy)', checked: true },
-  { id: 'd2', text: 'Complete list of current prescription and OTC medications with dosages', checked: true },
-  { id: 'd3', text: 'Government Photo ID and Health Insurance Card', checked: false },
-];
+import { useLanguage } from '../../context/LanguageContext';
 
 const AppointmentPrep = () => {
-  const [questions, setQuestions] = useState(defaultQuestions);
-  const [docs, setDocs] = useState(defaultDocs);
+  const { t } = useLanguage();
+
+  const [questions, setQuestions] = useState([]);
+  const [docs, setDocs] = useState([]);
   const [newQuestion, setNewQuestion] = useState('');
-  const [symptomNotes, setSymptomNotes] = useState(
-    'Headaches started 4 days ago, primarily in the mornings. Taking 400mg Ibuprofen with partial relief.'
-  );
+  const [symptomNotes, setSymptomNotes] = useState('');
+
+  // Localize default items when language loads or changes
+  useEffect(() => {
+    setQuestions([
+      { id: '1', text: t('appointment.q1'), checked: false },
+      { id: '2', text: t('appointment.q2'), checked: false },
+      { id: '3', text: t('appointment.q3'), checked: false },
+    ]);
+    setDocs([
+      { id: 'd1', text: t('appointment.doc1'), checked: true },
+      { id: 'd2', text: t('appointment.doc2'), checked: true },
+    ]);
+    setSymptomNotes(
+      `${t('appointment.info1')} ${t('appointment.info2')}`
+    );
+  }, [t]);
 
   const toggleQuestion = (id) => {
     setQuestions((prev) =>
@@ -68,7 +73,7 @@ const AppointmentPrep = () => {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-slate-800 tracking-tight">Appointment Preparation</h1>
+          <h1 className="text-3xl font-bold text-slate-800 tracking-tight">{t('appointment.title')}</h1>
           <p className="text-slate-500 text-sm mt-1">
             Personalized consultation checklist and clinical question builder for your next doctor visit
           </p>
@@ -88,7 +93,7 @@ const AppointmentPrep = () => {
           <div className="flex items-center space-x-2">
             <CheckCircle className="w-5 h-5 text-teal-600" />
             <h2 className="text-lg font-bold text-slate-800">
-              Questions for Your Healthcare Professional
+              {t('appointment.questionsTitle')}
             </h2>
           </div>
           <span className="text-xs text-slate-400">
@@ -153,7 +158,7 @@ const AppointmentPrep = () => {
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 space-y-4">
           <h2 className="text-lg font-bold text-slate-800 flex items-center space-x-2 border-b border-slate-100 pb-3">
             <FileText className="w-5 h-5 text-blue-600" />
-            <span>Documents to Bring</span>
+            <span>{t('appointment.docsTitle')}</span>
           </h2>
 
           <ul className="space-y-2.5">
@@ -180,7 +185,7 @@ const AppointmentPrep = () => {
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 space-y-4">
           <h2 className="text-lg font-bold text-slate-800 flex items-center space-x-2 border-b border-slate-100 pb-3">
             <Info className="w-5 h-5 text-amber-500" />
-            <span>Symptom Timeline to Mention</span>
+            <span>{t('appointment.infoTitle')}</span>
           </h2>
 
           <p className="text-xs text-slate-400">

@@ -5,15 +5,16 @@ import { Activity, Mail, Lock, User, Stethoscope, ShieldCheck, AlertCircle } fro
 import { motion } from 'framer-motion';
 
 const Login = () => {
-  const { login } = useAuth();
+  const { login, quickLogin } = useAuth();
   const navigate = useNavigate();
   
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [role, setRole] = useState('patient');
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
     if (!email.trim()) {
       setError('Email cannot be empty.');
@@ -25,13 +26,28 @@ const Login = () => {
     }
     
     setError('');
-    login(email, role);
-    navigate(`/${role}`);
+    setIsLoading(true);
+    try {
+      const authUser = await login(email, password);
+      navigate(`/${authUser.role || role}`);
+    } catch (err) {
+      setError(err.message || 'Login failed. Please verify your credentials.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const handleDemoLogin = (selectedRole) => {
-    login(`demo_${selectedRole}@example.com`, selectedRole);
-    navigate(`/${selectedRole}`);
+  const handleDemoLogin = async (selectedRole) => {
+    setError('');
+    setIsLoading(true);
+    try {
+      const authUser = await quickLogin(selectedRole);
+      navigate(`/${authUser.role || selectedRole}`);
+    } catch (err) {
+      setError(err.message || 'Quick login failed.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (

@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { apiFetch } from '../../context/AuthContext';
 import {
   Users as UsersIcon,
   Search,
@@ -29,6 +30,23 @@ const Users = () => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [newUser, setNewUser] = useState({ name: '', email: '', role: 'patient' });
 
+  useEffect(() => {
+    const loadUsers = async () => {
+      try {
+        const res = await apiFetch('/api/admin/users');
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) {
+            setUsers(data);
+          }
+        }
+      } catch (err) {
+        console.warn('Could not load users from backend API:', err);
+      }
+    };
+    loadUsers();
+  }, []);
+
   const filteredUsers = users.filter((u) => {
     const matchesRole = roleFilter === 'ALL' || u.role === roleFilter;
     const query = searchQuery.toLowerCase();
@@ -41,32 +59,69 @@ const Users = () => {
     return matchesRole && matchesSearch;
   });
 
-  const toggleStatus = (id) => {
+  const toggleStatus = async (id) => {
+    const targetUser = users.find((u) => u.id === id);
+    if (!targetUser) return;
+    const newStatus = targetUser.status === 'Suspended' ? 'Active' : 'Suspended';
+
+    // Optimistic update
     setUsers((prev) =>
-      prev.map((u) => {
-        if (u.id === id) {
-          const newStatus = u.status === 'Suspended' ? 'Active' : 'Suspended';
-          return { ...u, status: newStatus };
-        }
-        return u;
-      })
+      prev.map((u) => (u.id === id ? { ...u, status: newStatus } : u))
     );
+
+    try {
+      await apiFetch(`/api/admin/users/${id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus }),
+      });
+    } catch (err) {
+      console.warn('Status toggle persistence error:', err);
+    }
   };
 
-  const handleAddUser = (e) => {
+  const handleAddUser = async (e) => {
     e.preventDefault();
     if (!newUser.name || !newUser.email) return;
 
-    const created = {
-      id: String(Date.now()),
-      name: newUser.name,
-      email: newUser.email,
-      role: newUser.role,
-      status: 'Active',
-      joined: new Date().toISOString().split('T')[0],
-    };
+    try {
+      const res = await apiFetch('/api/admin/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newUser.name,
+          email: newUser.email,
+          role: newUser.role,
+          password: 'password123',
+        }),
+      });
 
-    setUsers([created, ...users]);
+      if (res.ok) {
+        const created = await res.json();
+        setUsers([created, ...users]);
+      } else {
+        const fallback = {
+          id: String(Date.now()),
+          name: newUser.name,
+          email: newUser.email,
+          role: newUser.role,
+          status: 'Active',
+          joined: new Date().toISOString().split('T')[0],
+        };
+        setUsers([fallback, ...users]);
+      }
+    } catch {
+      const fallback = {
+        id: String(Date.now()),
+        name: newUser.name,
+        email: newUser.email,
+        role: newUser.role,
+        status: 'Active',
+        joined: new Date().toISOString().split('T')[0],
+      };
+      setUsers([fallback, ...users]);
+    }
+
     setNewUser({ name: '', email: '', role: 'patient' });
     setShowAddModal(false);
   };

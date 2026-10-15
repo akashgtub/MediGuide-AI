@@ -13,6 +13,7 @@ import {
   Activity,
   UserCheck,
 } from 'lucide-react';
+import { apiFetch } from '../../context/AuthContext';
 
 const ReviewRequests = () => {
   const [reviews, setReviews] = useState([]);
@@ -24,7 +25,7 @@ const ReviewRequests = () => {
   const fetchReviews = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/reviews');
+      const res = await apiFetch('/api/reviews');
       if (res.ok) {
         const data = await res.json();
         setReviews(data);

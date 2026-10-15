@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { UploadCloud, FileText, AlertCircle, Loader2, CheckCircle2, X, RefreshCw } from 'lucide-react';
+import { apiFetch } from '../../context/AuthContext';
+import { useLanguage } from '../../context/LanguageContext';
 
 const SUPPORTED_FORMATS = ['.png', '.jpg', '.jpeg', '.pdf', '.bmp', '.tiff'];
 const MAX_SIZE_MB = 10;
@@ -9,6 +11,7 @@ const UPLOAD_TIMEOUT_MS = 20000; // 20 seconds timeout aligned with backend 15-s
 
 const UploadReport = () => {
   const navigate = useNavigate();
+  const { t } = useLanguage();
   const fileInputRef = useRef(null);
   const abortControllerRef = useRef(null);
 
@@ -17,7 +20,6 @@ const UploadReport = () => {
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [uploadStatus, setUploadStatus] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
 
   // Track elapsed time during analysis to provide transparent user feedback
@@ -26,17 +28,7 @@ const UploadReport = () => {
     if (isUploading) {
       setElapsedSeconds(0);
       timer = setInterval(() => {
-        setElapsedSeconds((prev) => {
-          const next = prev + 1;
-          if (next < 3) {
-            setUploadStatus('Step 1/3: Reading document and extracting clinical text...');
-          } else if (next < 8) {
-            setUploadStatus('Step 2/3: Recognizing biomedical entities, symptoms & measurements...');
-          } else {
-            setUploadStatus('Step 3/3: Generating patient summary & verifying clinical metrics...');
-          }
-          return next;
-        });
+        setElapsedSeconds((prev) => prev + 1);
       }, 1000);
     } else {
       setElapsedSeconds(0);
@@ -44,9 +36,21 @@ const UploadReport = () => {
     return () => clearInterval(timer);
   }, [isUploading]);
 
-  // Clean up preview object URL on unmount
+  const getStepStatus = () => {
+    if (elapsedSeconds < 3) {
+      return t('upload.step1');
+    } else if (elapsedSeconds < 8) {
+      return t('upload.step2');
+    }
+    return t('upload.step3');
+  };
+
+  // Clean up preview object URL and abort any in-flight request on unmount
   useEffect(() => {
     return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
       if (previewUrl && previewUrl.startsWith('blob:')) {
         URL.revokeObjectURL(previewUrl);
       }
@@ -117,7 +121,6 @@ const UploadReport = () => {
     setFile(null);
     setPreviewUrl(null);
     setErrorMessage('');
-    setUploadStatus('');
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -131,7 +134,6 @@ const UploadReport = () => {
 
     setIsUploading(true);
     setErrorMessage('');
-    setUploadStatus('Step 1/3: Reading document and extracting clinical text...');
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -145,7 +147,7 @@ const UploadReport = () => {
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await fetch('/api/upload', {
+      const response = await apiFetch('/api/upload', {
         method: 'POST',
         body: formData,
         signal: controller.signal,
@@ -173,8 +175,6 @@ const UploadReport = () => {
         sessionStorage.setItem(`mediguide_preview_${data.report_id}`, previewUrl);
       }
 
-      setUploadStatus('Analysis complete! Redirecting...');
-
       // Navigate to ReportAnalysis with actual data
       navigate(`/patient/reports/${data.report_id}`, {
         state: { report: data, previewUrl },
@@ -196,17 +196,15 @@ const UploadReport = () => {
 
   return (
     <div className="max-w-3xl mx-auto">
-      <h1 className="text-2xl font-bold text-slate-800 mb-2">Upload Medical Report</h1>
-      <p className="text-slate-500 mb-6 text-sm">
-        Upload lab reports, prescriptions, or clinical summaries for automated patient-friendly translation.
-      </p>
+      <h1 className="text-2xl font-bold text-slate-800 mb-2">{t('upload.title')}</h1>
+      <p className="text-slate-500 mb-6 text-sm">{t('upload.subtitle')}</p>
 
       {/* Error alert with retry button */}
       {errorMessage && (
         <div className="mb-6 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl flex items-start space-x-3 text-sm">
           <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-red-500" />
           <div className="flex-1">
-            <p className="font-semibold">Unable to process document</p>
+            <p className="font-semibold">{t('upload.errorTitle')}</p>
             <p className="mt-0.5 leading-relaxed">{errorMessage}</p>
             {file && (
               <div className="mt-3 flex space-x-3">
@@ -216,14 +214,14 @@ const UploadReport = () => {
                   className="inline-flex items-center space-x-1.5 bg-red-600 hover:bg-red-700 text-white text-xs px-3 py-1.5 rounded-lg font-medium transition-colors"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Retry Analysis</span>
+                  <span>{t('upload.retry')}</span>
                 </button>
                 <button
                   type="button"
                   onClick={handleClearFile}
                   className="text-xs text-slate-600 hover:text-slate-800 bg-white border border-slate-300 px-3 py-1.5 rounded-lg font-medium transition-colors"
                 >
-                  Select Another File
+                  {t('upload.change')}
                 </button>
               </div>
             )}
@@ -258,8 +256,8 @@ const UploadReport = () => {
           {isUploading ? (
             <div className="py-6 flex flex-col items-center max-w-md mx-auto">
               <Loader2 className="w-12 h-12 text-teal-600 animate-spin mb-4" />
-              <h3 className="text-lg font-bold text-slate-800 mb-1">Analyzing Medical Report</h3>
-              <p className="text-slate-600 text-sm font-medium mt-1">{uploadStatus}</p>
+              <h3 className="text-lg font-bold text-slate-800 mb-1">{t('upload.analyzingBtn')}</h3>
+              <p className="text-slate-600 text-sm font-medium mt-1">{getStepStatus()}</p>
               <p className="text-slate-400 text-xs mt-1">Elapsed time: {elapsedSeconds}s</p>
 
               <div className="w-64 bg-slate-100 rounded-full h-2 mt-4 overflow-hidden">
@@ -279,7 +277,7 @@ const UploadReport = () => {
                 }}
                 className="mt-6 text-xs text-slate-500 hover:text-red-600 font-medium underline"
               >
-                Cancel Analysis
+                {t('common.cancel')}
               </button>
             </div>
           ) : file ? (
@@ -297,23 +295,19 @@ const UploadReport = () => {
                   onClick={handleClearFile}
                   className="text-xs text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-lg font-medium transition-colors"
                 >
-                  Change File
+                  {t('upload.change')}
                 </button>
               </div>
             </div>
           ) : (
             <>
               <UploadCloud className="w-12 h-12 text-teal-500 mb-4" />
-              <h3 className="text-lg font-bold text-slate-800 mb-1">Click or drag file to this area</h3>
-              <p className="text-slate-500 text-sm mb-6 max-w-md">
-                Secure OCR and biomedical entity extraction. Documents are processed locally in a privacy-preserving environment.
-              </p>
+              <h3 className="text-lg font-bold text-slate-800 mb-1">{t('upload.dropTitle')}</h3>
+              <p className="text-slate-500 text-sm mb-6 max-w-md">{t('upload.dropSubtitle')}</p>
               <div className="bg-teal-600 text-white px-6 py-2.5 rounded-lg font-medium hover:bg-teal-700 transition-colors shadow-sm">
-                Select File
+                {t('upload.browse')}
               </div>
-              <p className="text-xs text-slate-400 mt-4">
-                Supported formats: PDF, JPG, PNG, BMP, TIFF (Max {MAX_SIZE_MB}MB)
-              </p>
+              <p className="text-xs text-slate-400 mt-4">{t('upload.maxSizeNotice')}</p>
             </>
           )}
         </div>
@@ -325,14 +319,14 @@ const UploadReport = () => {
               className="bg-teal-600 hover:bg-teal-700 text-white font-medium px-6 py-2.5 rounded-lg shadow-sm transition-colors flex items-center space-x-2"
             >
               <CheckCircle2 className="w-4 h-4" />
-              <span>Start Analysis</span>
+              <span>{t('upload.analyzeBtn')}</span>
             </button>
           </div>
         )}
       </div>
 
       <div className="mt-6 p-4 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-500 leading-relaxed">
-        <strong>Privacy & Clinical Disclaimer:</strong> MediGuide-AI processes documents exclusively to assist in medical comprehension. It does not provide clinical diagnoses, prescribe medications, or alter medical treatment plans.
+        {t('upload.privacyNote')}
       </div>
     </div>
   );

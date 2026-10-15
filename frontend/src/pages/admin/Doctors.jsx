@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { apiFetch } from '../../context/AuthContext';
 import {
   Stethoscope,
   Search,
@@ -70,6 +71,23 @@ const Doctors = () => {
     license: '',
     hospital: '',
   });
+
+  useEffect(() => {
+    const loadDoctors = async () => {
+      try {
+        const res = await apiFetch('/api/admin/doctors');
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) {
+            setDoctors(data);
+          }
+        }
+      } catch (err) {
+        console.warn('Could not load doctors from backend:', err);
+      }
+    };
+    loadDoctors();
+  }, []);
 
   const filteredDoctors = doctors.filter((doc) => {
     const matchesSpec = specialtyFilter === 'ALL' || doc.specialty === specialtyFilter;

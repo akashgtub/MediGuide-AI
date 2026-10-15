@@ -12,26 +12,55 @@ import {
   Info,
   CheckCircle2,
 } from 'lucide-react';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth, apiFetch } from '../../context/AuthContext';
+import { useLanguage } from '../../context/LanguageContext';
+import { SUPPORTED_LANGUAGES } from '../../i18n/translations';
 
 const PatientAssistant = () => {
   const { user } = useAuth();
+  const { language, setLanguage, t } = useLanguage();
   const messagesEndRef = useRef(null);
 
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [targetLanguage, setTargetLanguage] = useState('en');
+  const [targetLanguage, setTargetLanguage] = useState(language || 'en');
 
   const [messages, setMessages] = useState([
     {
       id: 'm-1',
       sender: 'assistant',
-      text: `Hello ${user?.name || 'there'}! I'm your MediGuide AI Health Information Assistant. I can help explain medical terms in your reports, summarize lab tests, or help you formulate clear questions for your physician.`,
-      guidance: ['Ask any question about your symptoms, lab measurements, or doctor appointments.'],
-      disclaimer: 'This system provides educational health information and does not diagnose, prescribe, or provide clinical treatments.',
+      text: t('assistant.welcome'),
+      guidance: [t('assistant.initialGuidance')],
+      disclaimer: t('assistant.initialDisclaimer'),
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     },
   ]);
+
+  // Keep targetLanguage synchronized with LanguageContext
+  useEffect(() => {
+    if (language) {
+      setTargetLanguage(language);
+    }
+  }, [language]);
+
+  // Refresh default welcome message if only greeting is present when language switches
+  useEffect(() => {
+    setMessages((prev) => {
+      if (prev.length === 1 && prev[0].id === 'm-1') {
+        return [
+          {
+            id: 'm-1',
+            sender: 'assistant',
+            text: t('assistant.welcome'),
+            guidance: [t('assistant.initialGuidance')],
+            disclaimer: t('assistant.initialDisclaimer'),
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          },
+        ];
+      }
+      return prev;
+    });
+  }, [language, t]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -57,7 +86,7 @@ const PatientAssistant = () => {
     setLoading(true);
 
     try {
-      const res = await fetch('/api/process-text', {
+      const res = await apiFetch('/api/process-text', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -104,10 +133,10 @@ const PatientAssistant = () => {
   };
 
   const samplePrompts = [
-    'What does a Blood Pressure reading of 130/85 mmHg mean?',
-    'What questions should I ask my doctor about fatigue?',
-    'Can I take Ibuprofen with other medications?',
-    'Explain Hemoglobin 12.5 g/dL in simple terms.',
+    t('assistant.prompt0'),
+    t('assistant.prompt1'),
+    t('assistant.prompt2'),
+    t('assistant.prompt3'),
   ];
 
   return (
@@ -115,9 +144,9 @@ const PatientAssistant = () => {
       {/* Header */}
       <div className="flex items-center justify-between mb-3 shrink-0">
         <div>
-          <h1 className="text-2xl font-bold text-slate-800">MediGuide Patient Assistant</h1>
+          <h1 className="text-2xl font-bold text-slate-800">{t('assistant.title')}</h1>
           <p className="text-slate-500 text-xs">
-            Interactive clinical translation & doctor consultation preparation
+            {t('assistant.subtitle')}
           </p>
         </div>
 
@@ -126,14 +155,17 @@ const PatientAssistant = () => {
           <Globe className="w-3.5 h-3.5 text-teal-600" />
           <select
             value={targetLanguage}
-            onChange={(e) => setTargetLanguage(e.target.value)}
-            className="text-xs bg-transparent text-slate-700 outline-none font-medium cursor-pointer"
+            onChange={(e) => {
+              setTargetLanguage(e.target.value);
+              setLanguage(e.target.value);
+            }}
+            className="text-xs bg-transparent text-slate-700 outline-none font-semibold cursor-pointer"
           >
-            <option value="en">English (US)</option>
-            <option value="es">Español (Spanish)</option>
-            <option value="fr">Français (French)</option>
-            <option value="de">Deutsch (German)</option>
-            <option value="hi">हिंदी (Hindi)</option>
+            {SUPPORTED_LANGUAGES.map((l) => (
+              <option key={l.code} value={l.code}>
+                {l.nativeName} ({l.name})
+              </option>
+            ))}
           </select>
         </div>
       </div>
@@ -142,7 +174,7 @@ const PatientAssistant = () => {
       <div className="bg-amber-50/90 border border-amber-200/80 text-amber-900 px-4 py-2.5 rounded-2xl flex items-center space-x-2.5 mb-3 text-xs shrink-0 shadow-sm">
         <Shield className="w-4 h-4 text-amber-600 shrink-0" />
         <span className="font-medium">
-          MediGuide AI provides patient educational guidance only. Never delay emergency care or modify prescriptions without consulting your physician.
+          {t('assistant.banner')}
         </span>
       </div>
 
@@ -172,7 +204,7 @@ const PatientAssistant = () => {
                   <div className={`mt-2 pt-2 border-t text-xs ${isUser ? 'border-teal-500/50' : 'border-slate-200'} space-y-1`}>
                     <p className="font-semibold flex items-center space-x-1">
                       <Sparkles className="w-3.5 h-3.5 mr-1" />
-                      <span>Next Steps & Preparation:</span>
+                      <span>{t('assistant.nextSteps')}</span>
                     </p>
                     <ul className="list-disc list-inside space-y-0.5 opacity-90 pl-1">
                       {m.guidance.map((g, idx) => (
@@ -187,7 +219,7 @@ const PatientAssistant = () => {
                   <div className="mt-2 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-xs flex items-start space-x-2">
                     <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
                     <div>
-                      <span className="font-bold">High Risk Escalation Flagged:</span>
+                      <span className="font-bold">{t('assistant.highRiskFlag')}</span>
                       <p className="mt-0.5 text-rose-700">
                         {m.reviewRequest.escalation_reasons?.join(', ')}
                       </p>
@@ -210,7 +242,7 @@ const PatientAssistant = () => {
           <div className="flex justify-start">
             <div className="bg-slate-50 border border-slate-100 text-slate-600 px-4 py-3 rounded-2xl rounded-tl-none text-xs flex items-center space-x-2">
               <Loader2 className="w-4 h-4 animate-spin text-teal-600" />
-              <span>Analyzing clinical context and formulating verified guidance...</span>
+              <span>{t('assistant.thinking')}</span>
             </div>
           </div>
         )}
@@ -245,7 +277,7 @@ const PatientAssistant = () => {
         >
           <input
             type="text"
-            placeholder="Ask questions about symptoms, medications, or lab measurements..."
+            placeholder={t('assistant.placeholder')}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             disabled={loading}
