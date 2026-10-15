@@ -181,3 +181,68 @@ def test_upload_returns_privacy_safe_stage_timings(monkeypatch):
     assert "total_seconds" in data["timings"]
     assert data["timings"]["total_seconds"] >= 0
 
+
+def test_list_reviews_endpoint():
+    """Verify listing review requests and filtering by status and risk level."""
+    response = client.get("/api/reviews")
+    assert response.status_code == 200
+    reviews = response.json()
+    assert isinstance(reviews, list)
+    assert len(reviews) >= 1
+
+    # Filter pending reviews
+    res_pending = client.get("/api/reviews?status=PENDING_REVIEW")
+    assert res_pending.status_code == 200
+    pending_list = res_pending.json()
+    assert all(r["status"] == "PENDING_REVIEW" for r in pending_list)
+
+    # Filter by risk level
+    res_high = client.get("/api/reviews?risk_level=HIGH")
+    assert res_high.status_code == 200
+    high_list = res_high.json()
+    assert all(r["risk_level"] == "HIGH" for r in high_list)
+
+
+def test_get_review_detail_and_decision_endpoint():
+    """Verify retrieving review details and submitting a clinician decision."""
+    # Seeded case MG-1024
+    res = client.get("/api/reviews/MG-1024")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["id"] == "MG-1024"
+    assert data["risk_level"] == "HIGH"
+    assert "chest pain" in data["summary"].lower()
+
+    # 404 for invalid ID
+    res_not_found = client.get("/api/reviews/NON_EXISTENT_CASE")
+    assert res_not_found.status_code == 404
+
+    # Submit decision
+    payload = {
+        "decision": "Recommend immediate ER visit",
+        "notes": "ECG required immediately due to severe chest pain presentation.",
+        "reviewer_name": "Dr. Sarah Wilson, MD",
+    }
+    res_decision = client.post("/api/reviews/MG-1024/decision", json=payload)
+    assert res_decision.status_code == 200
+    updated = res_decision.json()
+    assert updated["status"] == "COMPLETED"
+    assert updated["decision"] == "Recommend immediate ER visit"
+    assert "Dr. Sarah Wilson" in updated["reviewed_by"]
+    assert updated["reviewed_at"] is not None
+
+
+def test_system_stats_endpoint():
+    """Verify the /api/system/stats telemetry endpoint."""
+    response = client.get("/api/system/stats")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "operational"
+    assert "uptime_seconds" in data
+    assert "readiness" in data
+    assert "review_stats" in data
+    assert "total" in data["review_stats"]
+    assert "pending" in data["review_stats"]
+    assert "completed" in data["review_stats"]
+    assert len(data["services"]) >= 4
+

@@ -38,7 +38,16 @@ from ai.medical_extractor import extract_medical_info, get_ner_pipeline
 from ai.summarizer import summarize_medical_info, get_summarization_pipeline
 from ai.patient_agent import process_patient_request
 from risk.risk_engine import evaluate_risk
-from human_review.review_manager import create_review_request
+from human_review.review_manager import (
+    create_review_request,
+    add_review_request,
+    get_review_requests,
+    get_review_request_by_id,
+    submit_review_decision,
+    get_review_stats,
+)
+
+SERVER_START_TIME = time.time()
 
 # Configure privacy-safe logger
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -141,6 +150,12 @@ app.add_middleware(
 class TextProcessRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=50000)
     target_language: str = Field(default="en", max_length=10)
+
+
+class ReviewDecisionRequest(BaseModel):
+    decision: str = Field(..., min_length=1, max_length=200)
+    notes: str = Field(..., min_length=1, max_length=5000)
+    reviewer_name: Optional[str] = Field(default="Dr. Sarah Wilson", max_length=100)
 
 
 def _execute_pipeline_in_worker_thread(temp_file_path: str, filename: str) -> Dict[str, Any]:
@@ -345,3 +360,72 @@ def process_text_endpoint(payload: TextProcessRequest) -> Dict[str, Any]:
         document_text=payload.text, target_language=payload.target_language
     )
     return result
+
+
+@app.get("/api/reviews")
+def list_reviews(
+    status: Optional[str] = None, risk_level: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """List human clinical review requests with optional status and risk filtering."""
+    return get_review_requests(status=status, risk_level=risk_level)
+
+
+@app.get("/api/reviews/{request_id}")
+def get_review_detail(request_id: str) -> Dict[str, Any]:
+    """Retrieve detailed clinical escalation case by ID."""
+    review = get_review_request_by_id(request_id)
+    if not review:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Review request '{request_id}' not found.",
+        )
+    return review
+
+
+@app.post("/api/reviews/{request_id}/decision")
+def post_review_decision(
+    request_id: str, payload: ReviewDecisionRequest
+) -> Dict[str, Any]:
+    """Submit a healthcare professional's decision and clinical sign-off."""
+    updated = submit_review_decision(
+        request_id=request_id,
+        decision=payload.decision,
+        notes=payload.notes,
+        reviewer_name=payload.reviewer_name or "Dr. Sarah Wilson",
+    )
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Review request '{request_id}' not found.",
+        )
+    return updated
+
+
+@app.get("/api/system/stats")
+def system_stats() -> Dict[str, Any]:
+    """Provide real-time telemetry on system readiness, review queue, and service uptime."""
+    return {
+        "status": "operational",
+        "service": "MediGuide-AI Core",
+        "uptime_seconds": round(time.time() - SERVER_START_TIME, 1),
+        "readiness": model_readiness,
+        "review_stats": get_review_stats(),
+        "supported_formats": sorted(list(SUPPORTED_EXTENSIONS)),
+        "max_file_size_mb": 10,
+        "services": [
+            {
+                "name": "PaddleOCR Document Parser",
+                "status": "Ready" if model_readiness["ocr_ready"] else "Warming up",
+            },
+            {
+                "name": "Biomedical NER Engine",
+                "status": "Ready" if model_readiness["ner_ready"] else "Warming up",
+            },
+            {
+                "name": "DistilBART Clinical Summarizer",
+                "status": "Ready" if model_readiness["summarizer_ready"] else "Warming up",
+            },
+            {"name": "Deterministic Clinical Guardrails", "status": "Active"},
+            {"name": "Human Escalation Manager", "status": "Active"},
+        ],
+    }
