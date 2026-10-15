@@ -105,10 +105,83 @@ def _extract_text_lines(result: Any) -> List[str]:
     return text_lines
 
 
+def extract_text_from_pdf_native(file_path: str) -> str:
+    """
+    Directly extract digital text streams from PDF pages using PyMuPDF (fitz) or pypdf.
+    Extremely fast (< 50ms) and avoids heavy OCR computation on documents with digital text.
+    Returns extracted text if found, or empty string if document has no readable text (e.g. scanned).
+    """
+    if not file_path or not os.path.exists(file_path):
+        return ""
+
+    extracted_pages: List[str] = []
+    # 1. Attempt PyMuPDF (fitz)
+    try:
+        import fitz
+        doc = fitz.open(file_path)
+        for page in doc:
+            t = page.get_text()
+            if t and t.strip():
+                extracted_pages.append(t.strip())
+        doc.close()
+    except Exception as e:
+        logging.debug(f"fitz PDF text extraction failed or unavailable: {e}")
+
+    # 2. Fall back to pypdf if fitz was unavailable or found no text
+    if not extracted_pages:
+        try:
+            import pypdf
+            reader = pypdf.PdfReader(file_path)
+            for page in reader.pages:
+                t = page.extract_text()
+                if t and t.strip():
+                    extracted_pages.append(t.strip())
+        except Exception as e:
+            logging.debug(f"pypdf extraction failed: {e}")
+
+    if extracted_pages:
+        return "\n".join(extracted_pages)
+    return ""
+
+
+def _ocr_pdf_pages(file_path: str, engine: Any) -> str:
+    """
+    Render scanned/image PDF pages to temporary images and process via PaddleOCR.
+    Cleans up all temporary files immediately.
+    """
+    lines: List[str] = []
+    try:
+        import fitz
+        import tempfile
+        doc = fitz.open(file_path)
+        for page in doc:
+            pix = page.get_pixmap(dpi=150)
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                tmp_name = tmp.name
+            try:
+                pix.save(tmp_name)
+                if hasattr(engine, "predict"):
+                    res = engine.predict(tmp_name)
+                else:
+                    res = engine.ocr(tmp_name, cls=True)
+                lines.extend(_extract_text_lines(res))
+            finally:
+                if os.path.exists(tmp_name):
+                    try:
+                        os.remove(tmp_name)
+                    except OSError:
+                        pass
+        doc.close()
+    except Exception as e:
+        logging.warning(f"Failed to rasterize and OCR PDF pages: {e}")
+    return " ".join(lines)
+
+
 def extract_text_from_document(file_path: str) -> str:
     """
-    Extract recognized text from an image or PDF document using PaddleOCR.
-    Handles PNG, JPG, PDF safely.
+    Extract recognized text from an image or PDF document.
+    Prioritizes fast native digital PDF extraction; falls back to PaddleOCR
+    for images and scanned documents.
     
     Safety:
     This function ONLY extracts text from documents.
@@ -132,27 +205,36 @@ def extract_text_from_document(file_path: str) -> str:
 
     # Validate file extension
     _, ext = os.path.splitext(file_path)
-    if ext.lower() not in SUPPORTED_EXTENSIONS:
+    ext_lower = ext.lower()
+    if ext_lower not in SUPPORTED_EXTENSIONS:
         logging.warning(f"Unsupported file format: {ext} for file: {file_path}")
         return ""
 
+    # Fast path for PDFs with digital text streams
+    if ext_lower == ".pdf":
+        native_text = extract_text_from_pdf_native(file_path)
+        logging.info("PDF native text check: '%s' yielded %d characters", file_path, len(native_text) if native_text else 0)
+        if native_text and len(native_text.strip()) >= 15:
+            return process_document(native_text)
+        logging.warning("PDF native extraction yielded insufficient text; falling back to PaddleOCR for '%s'", file_path)
+
+    # Scanned PDF or Image: requires OCR engine
     engine = get_ocr_engine()
     if engine is None:
         logging.error("OCR engine is not available.")
         return ""
 
     try:
-        # Use predict if available (PaddleOCR 3.x), fallback to ocr (PaddleOCR 2.x)
-        if hasattr(engine, "predict"):
-            result = engine.predict(file_path)
+        if ext_lower == ".pdf":
+            extracted_text = _ocr_pdf_pages(file_path, engine)
         else:
-            result = engine.ocr(file_path, cls=True)
+            if hasattr(engine, "predict"):
+                result = engine.predict(file_path)
+            else:
+                result = engine.ocr(file_path, cls=True)
+            extracted_lines = _extract_text_lines(result)
+            extracted_text = " ".join(extracted_lines)
 
-        extracted_lines = _extract_text_lines(result)
-        if not extracted_lines:
-            return ""
-
-        extracted_text = " ".join(extracted_lines)
         return process_document(extracted_text)
     except Exception as e:
         logging.error(f"Failed to process document {file_path}: {e}")

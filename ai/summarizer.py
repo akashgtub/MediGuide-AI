@@ -231,6 +231,9 @@ def _run_neural_summarization(
                 chunk,
                 max_length=max_len,
                 min_length=min_len,
+                num_beams=1,
+                early_stopping=False,
+                length_penalty=1.0,
                 do_sample=False,
                 truncation=True,
             )
@@ -298,7 +301,9 @@ def _generate_deterministic_summary(extracted_info: Dict[str, Any]) -> str:
 
 
 def summarize_medical_info(
-    extracted_info: Any, source_text: Optional[str] = None
+    extracted_info: Any,
+    source_text: Optional[str] = None,
+    time_budget_seconds: Optional[float] = None,
 ) -> str:
     """
     Convert extracted information into a patient-friendly summary.
@@ -332,6 +337,12 @@ def summarize_medical_info(
             "Please note this is not a diagnosis or clinical recommendation. "
             "Information appears incomplete or no specific medical data was detected."
         )
+
+    # If remaining processing budget is insufficient for neural generation on CPU (< 9.5s),
+    # use deterministic summary immediately to guarantee returning within the 15-second budget.
+    if time_budget_seconds is not None and time_budget_seconds < 9.5:
+        logging.info("Remaining time budget (%.2fs) insufficient for neural generation; using deterministic summary fallback.", time_budget_seconds)
+        return _generate_deterministic_summary(extracted_info)
 
     # 1. Attempt neural summarization if pipeline is available
     pipeline_obj = get_summarization_pipeline()

@@ -21,6 +21,8 @@ import uuid
 import asyncio
 import logging
 import tempfile
+import threading
+from contextlib import asynccontextmanager
 from typing import Optional, Dict, Any, List
 from fastapi import FastAPI, File, UploadFile, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,10 +31,11 @@ from pydantic import BaseModel, Field
 from ai.document_processor import (
     extract_text_from_document,
     process_document,
+    get_ocr_engine,
     SUPPORTED_EXTENSIONS,
 )
-from ai.medical_extractor import extract_medical_info
-from ai.summarizer import summarize_medical_info
+from ai.medical_extractor import extract_medical_info, get_ner_pipeline
+from ai.summarizer import summarize_medical_info, get_summarization_pipeline
 from ai.patient_agent import process_patient_request
 from risk.risk_engine import evaluate_risk
 from human_review.review_manager import create_review_request
@@ -43,11 +46,81 @@ logger = logging.getLogger("mediguide_backend")
 
 MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB upload limit
 CHUNK_SIZE = 1024 * 1024  # 1 MB read buffer
+PROCESSING_BUDGET_SECONDS = 15.0
+
+# Track service model readiness
+model_readiness = {
+    "ocr_ready": False,
+    "ner_ready": False,
+    "summarizer_ready": False,
+    "fully_ready": False,
+}
+
+
+def warmup_models() -> None:
+    """
+    Warm up OCR, NER, and summarizer models in a background worker thread
+    so all weights, tokenizers, and engines are cached in memory before user requests arrive.
+    Prevents cold-start pauses on initial document uploads.
+    """
+    logger.info("Initiating backend model background warmup...")
+
+    # 1. Biomedical NER model warmup
+    try:
+        pipe = get_ner_pipeline()
+        if pipe:
+            pipe("Patient reports mild fatigue.")
+        model_readiness["ner_ready"] = True
+        logger.info("Biomedical NER model warmed up.")
+    except Exception as e:
+        logger.warning("NER warmup encountered an error: %s", e)
+
+    # 2. Summarization model warmup
+    try:
+        spipe = get_summarization_pipeline()
+        if spipe:
+            spipe(
+                "Patient reports mild fatigue.",
+                max_length=20,
+                min_length=5,
+                num_beams=1,
+                early_stopping=False,
+                length_penalty=1.0,
+            )
+        model_readiness["summarizer_ready"] = True
+        logger.info("Summarization model warmed up.")
+    except Exception as e:
+        logger.warning("Summarizer warmup encountered an error: %s", e)
+
+    # 3. PaddleOCR engine warmup
+    try:
+        get_ocr_engine()
+        model_readiness["ocr_ready"] = True
+        logger.info("PaddleOCR engine warmed up.")
+    except Exception as e:
+        logger.warning("PaddleOCR warmup encountered an error: %s", e)
+
+    model_readiness["fully_ready"] = (
+        model_readiness["ner_ready"]
+        and model_readiness["summarizer_ready"]
+        and model_readiness["ocr_ready"]
+    )
+    logger.info("Model warmup completed. Readiness status: %s", model_readiness)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Warm up models in background without blocking server startup
+    warmup_thread = threading.Thread(target=warmup_models, daemon=True)
+    warmup_thread.start()
+    yield
+
 
 app = FastAPI(
     title="MediGuide-AI API",
     description="Patient-centric medical document summarization and extraction API",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # CORS configured for local React development
@@ -73,12 +146,13 @@ class TextProcessRequest(BaseModel):
 def _execute_pipeline_in_worker_thread(temp_file_path: str, filename: str) -> Dict[str, Any]:
     """
     Synchronous CPU-bound pipeline execution running in a worker thread.
+    Enforces a strict 15-second processing budget with stage-level deadlines.
     Prevents blocking the main FastAPI asyncio event loop.
     Captures privacy-safe stage timings.
     """
     t_start = time.time()
 
-    # Stage 1: Document OCR extraction
+    # Stage 1: Document text extraction (OCR or native PDF)
     t0 = time.time()
     raw_text = extract_text_from_document(temp_file_path)
     cleaned_text = process_document(raw_text)
@@ -91,14 +165,28 @@ def _execute_pipeline_in_worker_thread(temp_file_path: str, filename: str) -> Di
             detail="Could not extract readable text from the document. Please ensure the file contains legible text.",
         )
 
+    time_elapsed = time.time() - t_start
+    time_remaining = PROCESSING_BUDGET_SECONDS - time_elapsed
+
     # Stage 2: Biomedical Named Entity Recognition & deterministic metrics
     t1 = time.time()
-    extracted_info = extract_medical_info(cleaned_text)
+    # Run full NER model if backend is ready and budget permits (> 3.0s);
+    # otherwise fallback immediately to deterministic extractor to prevent cold timeout
+    if model_readiness["ner_ready"] and time_remaining > 3.0:
+        extracted_info = extract_medical_info(cleaned_text, run_ner_model=True)
+    else:
+        logger.info("NER model not ready or low budget (%.2fs); using deterministic extractor fallback.", time_remaining)
+        extracted_info = extract_medical_info(cleaned_text, run_ner_model=False)
     t_ner = round(time.time() - t1, 3)
+
+    time_elapsed = time.time() - t_start
+    time_remaining = PROCESSING_BUDGET_SECONDS - time_elapsed
 
     # Stage 3: Medical Summarization with clinical verification
     t2 = time.time()
-    summary = summarize_medical_info(extracted_info, source_text=cleaned_text)
+    # If backend summarizer is ready, pass time_remaining; otherwise pass 0.0 to safely use deterministic fallback
+    sum_budget = time_remaining if model_readiness["summarizer_ready"] else 0.0
+    summary = summarize_medical_info(extracted_info, source_text=cleaned_text, time_budget_seconds=sum_budget)
     t_sum = round(time.time() - t2, 3)
 
     # Stage 4: Risk Evaluation & Human Review Escalation
@@ -167,6 +255,7 @@ def health_check() -> Dict[str, Any]:
         "version": "1.0.0",
         "supported_formats": sorted(list(SUPPORTED_EXTENSIONS)),
         "max_file_size_mb": 10,
+        "readiness": model_readiness,
     }
 
 
@@ -224,11 +313,21 @@ async def upload_document(file: UploadFile = File(...)) -> Dict[str, Any]:
             content_length,
         )
 
-        # Offload synchronous CPU-heavy inference to a worker thread to keep the asyncio event loop free
-        result = await asyncio.to_thread(
-            _execute_pipeline_in_worker_thread, temp_file_path, file.filename
-        )
-        return result
+        # Offload synchronous CPU-heavy inference to a worker thread with strict 15-second budget
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    _execute_pipeline_in_worker_thread, temp_file_path, file.filename
+                ),
+                timeout=PROCESSING_BUDGET_SECONDS,
+            )
+            return result
+        except asyncio.TimeoutError:
+            logger.warning("Upload processing exceeded %.1fs budget timeout.", PROCESSING_BUDGET_SECONDS)
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail="Processing timed out after 15 seconds. Please try a clearer or smaller document.",
+            )
 
     finally:
         # Guarantee removal of temporary file

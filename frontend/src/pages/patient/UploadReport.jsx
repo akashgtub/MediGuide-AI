@@ -5,7 +5,7 @@ import { UploadCloud, FileText, AlertCircle, Loader2, CheckCircle2, X, RefreshCw
 const SUPPORTED_FORMATS = ['.png', '.jpg', '.jpeg', '.pdf', '.bmp', '.tiff'];
 const MAX_SIZE_MB = 10;
 const MAX_SIZE_BYTES = MAX_SIZE_MB * 1024 * 1024;
-const UPLOAD_TIMEOUT_MS = 120000; // 120 seconds timeout for CPU-bound OCR and ML inference
+const UPLOAD_TIMEOUT_MS = 20000; // 20 seconds timeout aligned with backend 15-second budget
 
 const UploadReport = () => {
   const navigate = useNavigate();
@@ -28,9 +28,9 @@ const UploadReport = () => {
       timer = setInterval(() => {
         setElapsedSeconds((prev) => {
           const next = prev + 1;
-          if (next < 15) {
-            setUploadStatus('Step 1/3: Reading image and extracting text via PaddleOCR...');
-          } else if (next < 32) {
+          if (next < 3) {
+            setUploadStatus('Step 1/3: Reading document and extracting clinical text...');
+          } else if (next < 8) {
             setUploadStatus('Step 2/3: Recognizing biomedical entities, symptoms & measurements...');
           } else {
             setUploadStatus('Step 3/3: Generating patient summary & verifying clinical metrics...');
@@ -131,7 +131,7 @@ const UploadReport = () => {
 
     setIsUploading(true);
     setErrorMessage('');
-    setUploadStatus('Step 1/3: Reading image and extracting text via PaddleOCR...');
+    setUploadStatus('Step 1/3: Reading document and extracting clinical text...');
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -182,7 +182,7 @@ const UploadReport = () => {
     } catch (err) {
       if (err.name === 'AbortError') {
         setErrorMessage(
-          `Analysis timed out after ${UPLOAD_TIMEOUT_MS / 1000}s. On CPU environments, large documents may take longer. Please try a clearer or smaller document, or click Retry.`
+          `Analysis timed out after ${UPLOAD_TIMEOUT_MS / 1000}s. Please check document clarity or click Retry.`
         );
       } else {
         setErrorMessage(err.message || 'An unexpected error occurred during processing.');

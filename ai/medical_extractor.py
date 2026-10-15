@@ -54,6 +54,7 @@ def get_ner_pipeline():
     """
     Lazily load and return the Hugging Face token-classification pipeline
     for the pretrained biomedical NER model 'd4data/biomedical-ner-all'.
+    Prefers loading from local cache without network retry delays.
     Handles missing dependencies or loading errors safely.
     """
     global _ner_pipeline
@@ -61,12 +62,22 @@ def get_ner_pipeline():
         return _ner_pipeline
 
     try:
-        from transformers import pipeline
-        _ner_pipeline = pipeline(
-            "ner",
-            model=NER_MODEL_NAME,
-            aggregation_strategy="simple"
-        )
+        from transformers import AutoTokenizer, AutoModelForTokenClassification, pipeline
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(NER_MODEL_NAME, local_files_only=True)
+            model = AutoModelForTokenClassification.from_pretrained(NER_MODEL_NAME, local_files_only=True)
+            _ner_pipeline = pipeline(
+                "ner",
+                model=model,
+                tokenizer=tokenizer,
+                aggregation_strategy="simple"
+            )
+        except Exception:
+            _ner_pipeline = pipeline(
+                "ner",
+                model=NER_MODEL_NAME,
+                aggregation_strategy="simple"
+            )
     except Exception as e:
         logging.warning(f"Could not initialize biomedical NER model '{NER_MODEL_NAME}': {e}")
         _ner_pipeline = None
@@ -229,9 +240,10 @@ def _extract_observations(text: str) -> List[str]:
     """
     observations: List[str] = []
 
-    # Normalize multiline observation headers (e.g. "Reported observation:\nPatient...")
+    # Normalize multiline, colon-less, and sectioned observation headers
+    # (e.g. "Reported observation:\nPatient...", "Reported observation\nPatient...", "Reported observation Patient...")
     normalized_text = re.sub(
-        r'\b(reported\s+observation|clinical\s+observation|observation|notes?)\s*:\s*\n+',
+        r'\b(reported\s+observation|clinical\s+observation|observation|notes?)\s*(?::\s*|\s*\n+|\s+(?=[A-Z]))',
         r'\1: ',
         text,
         flags=re.IGNORECASE
@@ -281,7 +293,7 @@ def _extract_observations(text: str) -> List[str]:
     return observations
 
 
-def extract_medical_info(text: str) -> Dict[str, Any]:
+def extract_medical_info(text: str, run_ner_model: bool = True) -> Dict[str, Any]:
     """
     Extract structured medical information from text.
     Combines pretrained biomedical NER with deterministic parsing for
@@ -316,7 +328,11 @@ def extract_medical_info(text: str) -> Dict[str, Any]:
     text_lower = text.lower()
 
     # 1. Run Pretrained Biomedical Named Entity Recognition
-    ner_entities = extract_biomedical_entities(text)
+    # If the neural pipeline is loaded and ready, run neural inference;
+    # if not yet loaded, use safe deterministic extraction to strictly honor the processing budget.
+    ner_entities = []
+    if run_ner_model and _ner_pipeline is not None:
+        ner_entities = extract_biomedical_entities(text)
     result['entities'] = ner_entities
 
     # Check for negative medication statement (e.g., "Medications mentioned: None listed.")
