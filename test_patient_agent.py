@@ -425,3 +425,191 @@ def test_emergency_overrides_multi_turn_context():
     # Must link to the active report context if available
     assert turn2_res["review_request"]["report_id"] is not None
 
+
+# ============================================================================
+# 21. Identity Question Receives Concise Identity Response (Part 1 & 6)
+# ============================================================================
+
+def test_identity_question_concise_response():
+    """Verify 'what is your name' and identity queries return concise identity with zero boilerplate."""
+    # Query: "what is your name"
+    res = process_patient_request("what is your name", user_id="1")
+    assert res["intent"] == "IDENTITY"
+    assert res["review_request"] is None
+    assert len(res["guidance"]) == 0
+    assert res["disclaimer"] == ""
+    assert res["report_list"] is None
+    summary_lower = res["translated_summary"].lower()
+    assert "mediguide-ai" in summary_lower
+    assert "health information assistant" in summary_lower
+    assert "explain your uploaded reports" in summary_lower
+    # Must NOT dump reports or invoke document processing
+    assert "report list" not in summary_lower
+    assert "summary of the provided document" not in summary_lower
+
+    # Query: "who are you"
+    res_who = process_patient_request("who are you", user_id="1")
+    assert res_who["intent"] == "IDENTITY"
+    assert "mediguide-ai" in res_who["translated_summary"].lower()
+
+
+# ============================================================================
+# 22. User Introduction Is Acknowledged Naturally (Part 1 & 6)
+# ============================================================================
+
+def test_user_introduction_acknowledged():
+    """Verify user introductions like 'I am Akash' or 'My name is Akash' greet warmly without medical entity extraction."""
+    # 1. "I am Akash"
+    res1 = process_patient_request("I am Akash", user_id="1")
+    assert res1["intent"] == "USER_INTRODUCTION"
+    assert res1["review_request"] is None
+    assert len(res1["guidance"]) == 0
+    assert res1["disclaimer"] == ""
+    assert res1["report_list"] is None
+    assert "Akash" in res1["translated_summary"]
+    assert "Nice to meet you" in res1["translated_summary"]
+
+    # 2. "My name is Akash"
+    res2 = process_patient_request("My name is Akash", user_id="1")
+    assert res2["intent"] == "USER_INTRODUCTION"
+    assert "Akash" in res2["translated_summary"]
+    assert "Nice to meet you" in res2["translated_summary"]
+
+    # 3. Tamil Introduction: "நான் ஆகாஷ்"
+    res_ta = process_patient_request("நான் ஆகாஷ்", user_id="1", target_language="ta")
+    assert res_ta["intent"] == "USER_INTRODUCTION"
+    assert "ஆகாஷ்" in res_ta["translated_summary"]
+    assert "மகிழ்ச்சி" in res_ta["translated_summary"]
+
+
+# ============================================================================
+# 23. General Disease Questions Do Not Trigger Report List (Part 1 & 6)
+# ============================================================================
+
+def test_general_disease_questions_do_not_trigger_report_list():
+    """Verify questions like 'what is the most dangerous disease' return education without listing 58 reports."""
+    # User 1 has dozens of reports in the database
+    res = process_patient_request("what is the most dangerous disease", user_id="1")
+    assert res["intent"] == "GENERAL_MEDICAL_EDUCATION"
+    assert res["review_request"] is None
+    assert res["report_list"] is None
+    summary_lower = res["translated_summary"].lower()
+    # Must explain that there is no single universally most dangerous disease
+    assert "no single universally most dangerous disease" in summary_lower
+    assert "severity" in summary_lower
+    assert "complications" in summary_lower
+    # Must ask whether they want general info or help understanding a particular report
+    assert "medical report" in summary_lower
+    assert "help understanding" in summary_lower or "general health education" in summary_lower
+    # Must NEVER dump all user reports
+    assert "all 58" not in summary_lower
+    assert "you have 58 reports" not in summary_lower
+
+    # General question: "what is hypertension"
+    res_htn = process_patient_request("what is hypertension", user_id="1")
+    assert res_htn["intent"] == "GENERAL_MEDICAL_EDUCATION"
+    assert res_htn["report_list"] is None
+    assert "hypertension" in res_htn["translated_summary"].lower()
+    assert "blood pressure" in res_htn["translated_summary"].lower()
+
+
+# ============================================================================
+# 24. Explicit Report List Requests Retrieve Only Authenticated Patient's Reports (Part 5 & 6)
+# ============================================================================
+
+def test_explicit_report_list_authenticated_patient():
+    """Verify explicit requests to list reports return only the requesting patient's reports in structured format."""
+    # User 1 (Alex Morgan) requests report list
+    res_u1 = process_patient_request("show my reports", user_id="1")
+    assert res_u1["intent"] == "REPORT_LIST"
+    assert res_u1["review_request"] is None
+    assert res_u1["report_list"] is not None
+    assert 1 <= len(res_u1["report_list"]) <= 10
+    # Structured report_list entries contain report_id, filename, created_at
+    for r in res_u1["report_list"]:
+        assert "report_id" in r
+        assert "filename" in r
+        assert "created_at" in r
+
+    # User 4 (Maria Gonzalez) requests report list
+    res_u4 = process_patient_request("list my uploaded reports", user_id="4")
+    assert res_u4["intent"] == "REPORT_LIST"
+    assert res_u4["report_list"] is not None
+    # User 4's reports must NOT contain User 1's reports
+    u1_report_ids = [r["report_id"] for r in res_u1["report_list"]]
+    for r in res_u4["report_list"]:
+        assert r["report_id"] not in u1_report_ids
+
+    # Unauthenticated user requests reports
+    res_unauth = process_patient_request("show my reports", user_id=None)
+    assert res_unauth["intent"] == "REPORT_LIST"
+    assert not res_unauth["report_list"]
+    assert "authentication is required" in res_unauth["translated_summary"].lower() or "log in" in res_unauth["translated_summary"].lower()
+
+
+# ============================================================================
+# 25. Language Consistency Across All 6 Supported Languages (Part 2 & 6)
+# ============================================================================
+
+def test_language_consistency_across_all_supported_languages():
+    """Verify single consistent language per turn across English, Tamil, Hindi, Telugu, Malayalam, and Kannada."""
+    # 1. English: "hi" must return pure English without Tamil/Hindi disclaimers or instructions
+    res_en = process_patient_request("hi", target_language="en")
+    assert res_en["detected_language"] == "en"
+    assert res_en["response_language"] == "en"
+    assert res_en["translated_summary"] == "Hello! I'm MediGuide-AI, your health information assistant. How can I help you today?"
+    assert res_en["disclaimer"] == ""
+    assert len(res_en["guidance"]) == 0
+
+    # 2. Tamil: "வணக்கம்"
+    res_ta = process_patient_request("வணக்கம்", target_language="ta")
+    assert res_ta["detected_language"] == "ta"
+    assert res_ta["response_language"] == "ta"
+    assert "வணக்கம்" in res_ta["translated_summary"]
+    assert "மெடிகைட்" in res_ta["translated_summary"] or "MediGuide" in res_ta["translated_summary"]
+    assert res_ta["disclaimer"] == ""
+    assert len(res_ta["guidance"]) == 0
+
+    # 3. Hindi: "नमस्ते"
+    res_hi = process_patient_request("नमस्ते", target_language="hi")
+    assert res_hi["detected_language"] == "hi"
+    assert res_hi["response_language"] == "hi"
+    assert "नमस्ते" in res_hi["translated_summary"]
+    assert "मेडीगाइड" in res_hi["translated_summary"] or "MediGuide" in res_hi["translated_summary"]
+
+    # 4. Telugu: "నమస్కారం"
+    res_te = process_patient_request("నమస్కారం", target_language="te")
+    assert res_te["detected_language"] == "te"
+    assert res_te["response_language"] == "te"
+    assert "నమస్కారం" in res_te["translated_summary"]
+
+    # 5. Malayalam: "നമസ്കാരം"
+    res_ml = process_patient_request("നമസ്കാരം", target_language="ml")
+    assert res_ml["detected_language"] == "ml"
+    assert res_ml["response_language"] == "ml"
+    assert "നമസ്കാരം" in res_ml["translated_summary"]
+
+    # 6. Kannada: "ನಮಸ್ಕಾರ"
+    res_kn = process_patient_request("ನಮಸ್ಕಾರ", target_language="kn")
+    assert res_kn["detected_language"] == "kn"
+    assert res_kn["response_language"] == "kn"
+    assert "ನಮಸ್ಕಾರ" in res_kn["translated_summary"]
+
+
+# ============================================================================
+# 26. Report Summary Optional Fields Fallback (Part 3 & 6)
+# ============================================================================
+
+def test_report_summary_optional_fields_fallback():
+    """Verify that report summary and metrics handle missing reference ranges or units safely."""
+    # Query report 101 summary
+    res = process_patient_request("summarize my CBC report", user_id="1", report_id="101")
+    assert res["intent"] == "REPORT_OVERVIEW"
+    assert res["review_request"] is None
+    summary_text = res["translated_summary"]
+    assert len(summary_text) > 0
+    # Summary should not be raw JSON
+    assert "{" not in summary_text[:50]
+    assert "}" not in summary_text[-50:]
+
+

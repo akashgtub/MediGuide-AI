@@ -372,11 +372,18 @@ def _detect_report_overview_intent(text: str) -> bool:
         "என் அறிக்கையை விளக்குங்கள்", "என் அறிக்கையை சுருக்கவும்",
         "मेरी रिपोर्ट समझाओ", "मेरी रिपोर्ट का सारांश",
         "నా రిపోర్ట్‌ను వివరించండి",
+        "what were my test results", "what are my test results", "what are my results",
+        "what were my results", "what was in my report", "what is in my report",
+        "what are my report results", "what did my test results say", "what did my report say",
+        "my test results", "my lab results", "what were my results",
     ]
     if any(p in text_lower for p in overview_phrases):
         return True
 
     if any(w in text_lower for w in ["summarize", "explain", "overview"]) and any(r in text_lower for r in ["report", "results", "findings"]):
+        return True
+
+    if ("my test result" in text_lower or "my results" in text_lower or "my lab" in text_lower or "my report" in text_lower) and any(w in text_lower for w in ["what", "show", "tell", "explain", "summarize", "view"]):
         return True
 
     return False
@@ -637,17 +644,17 @@ def classify_patient_intent(
     if _detect_general_medical_education(text):
         return "GENERAL_MEDICAL_EDUCATION"
 
-    # Priority 6: Report Metric Query ("what was my hemoglobin", "what is my blood pressure")
-    if _detect_metric_inquiry(text):
-        return "REPORT_METRIC_QUERY"
+    # Priority 6: Risk Question or Contextual Follow-up ("is this normal", "is that concerning", "is that reading normal", "when was that")
+    if _detect_risk_question_intent(text):
+        return "RISK_QUESTION"
 
-    # Priority 7: Report Overview / Summary ("summarize my CBC report", "explain my report")
+    # Priority 7: Report Overview / Summary ("summarize my CBC report", "explain my report", "what were my test results")
     if _detect_report_overview_intent(text):
         return "REPORT_OVERVIEW"
 
-    # Priority 8: Risk Question or Contextual Follow-up ("is this normal", "is that concerning", "when was that")
-    if _detect_risk_question_intent(text):
-        return "RISK_QUESTION"
+    # Priority 8: Report Metric Query ("what was my hemoglobin", "what is my blood pressure")
+    if _detect_metric_inquiry(text):
+        return "REPORT_METRIC_QUERY"
 
     # Priority 9: Explicit Document Narrative Text (OCR record, lab results text)
     if _detect_document_narrative(text):
