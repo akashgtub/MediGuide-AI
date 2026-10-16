@@ -10,20 +10,44 @@ from backend.database import (
 )
 
 
-def create_review_request(extracted_info: dict, summary: str, risk_result: dict) -> dict:
+def create_review_request(
+    extracted_info: dict,
+    summary: str,
+    risk_result: dict,
+    patient_id: Optional[str] = None,
+    report_id: Optional[str] = None,
+) -> dict:
     """
     Create a structured human-review request and persist it to SQLite.
     Include the relevant extracted information, summary, risk result, and reason for escalation.
     Clearly mark that final clinical decisions belong to a qualified healthcare professional.
+    Prevents duplicate pending escalation tickets for the same patient and reasons.
     """
+    reasons = risk_result.get("reasons", [])
+
+    # Check for existing identical pending escalation to prevent ticket flooding
+    if patient_id:
+        try:
+            pending_cases = query_review_requests(status="PENDING_REVIEW")
+            for c in pending_cases:
+                if str(c.get("patient_id")) == str(patient_id):
+                    if report_id and c.get("report_id") != report_id:
+                        continue
+                    if c.get("escalation_reasons") == reasons or (not reasons and c.get("summary") == summary):
+                        return c
+        except Exception:
+            pass
+
     req_id = f"MG-{str(uuid.uuid4())[:8].upper()}"
     now_iso = datetime.now(timezone.utc).isoformat()
+    resolved_patient_id = str(patient_id) if patient_id else f"PT-{str(uuid.uuid4())[:4].upper()} (Anonymized)"
 
     request = {
         "id": req_id,
-        "patient_id": f"PT-{str(uuid.uuid4())[:4].upper()} (Anonymized)",
+        "patient_id": resolved_patient_id,
+        "report_id": report_id,
         "disclaimer": "FINAL CLINICAL DECISIONS BELONG TO A QUALIFIED HEALTHCARE PROFESSIONAL.",
-        "escalation_reasons": risk_result.get("reasons", []),
+        "escalation_reasons": reasons,
         "risk_level": "HIGH" if risk_result.get("is_high_risk") else ("UNCERTAIN" if risk_result.get("uncertainty_flag") else "LOW"),
         "summary": summary,
         "extracted_data": extracted_info,

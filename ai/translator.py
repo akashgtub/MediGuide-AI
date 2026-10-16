@@ -356,6 +356,13 @@ def translate_text(text: str, target_language: str = "en", source_language: Opti
     if target_lang not in SUPPORTED_LANGUAGES:
         return f"[Translated to {target_lang}]: {text}"
 
+    # Check emergency warning variants across all supported languages
+    if text.strip() in (
+        "Warning: Severe medical symptoms detected. Emergency clinical intervention is advised.",
+        "Warning: Severe symptoms detected. Please contact emergency medical services or go to the nearest emergency department immediately.",
+    ):
+        return CLINICAL_DISCLAIMERS["emergency_warning"].get(target_lang, CLINICAL_DISCLAIMERS["emergency_warning"]["en"])
+
     # 3. Check exact disclaimer matches
     for _, trans_dict in CLINICAL_DISCLAIMERS.items():
         if text.strip() == trans_dict["en"]:

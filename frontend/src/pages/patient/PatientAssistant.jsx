@@ -86,12 +86,23 @@ const PatientAssistant = () => {
     setLoading(true);
 
     try {
+      // Gather recent message history for multi-turn context
+      const historyPayload = messages.slice(-6).map((m) => ({
+        sender: m.sender,
+        text: m.text,
+      }));
+
+      const queryParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+      const activeReportId = queryParams ? (queryParams.get('reportId') || queryParams.get('report_id')) : null;
+
       const res = await apiFetch('/api/process-text', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text: query,
           target_language: targetLanguage,
+          report_id: activeReportId || undefined,
+          conversation_history: historyPayload,
         }),
       });
 

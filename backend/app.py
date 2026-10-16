@@ -51,6 +51,7 @@ from backend.database import (
     save_report,
     get_report_by_id,
     get_reports_by_user,
+    find_duplicate_report,
     get_user_by_email,
     get_user_by_id,
     get_all_users,
@@ -81,7 +82,7 @@ logger = logging.getLogger("mediguide_backend")
 
 MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB upload limit
 CHUNK_SIZE = 1024 * 1024  # 1 MB read buffer
-PROCESSING_BUDGET_SECONDS = 15.0
+PROCESSING_BUDGET_SECONDS = 40.0
 
 # Dedicated thread pool executor for CPU-bound document inference
 upload_executor = concurrent.futures.ThreadPoolExecutor(
@@ -111,9 +112,12 @@ def warmup_models() -> None:
         pipe = get_ner_pipeline()
         if pipe:
             pipe("Patient reports mild fatigue.")
-        model_readiness["ner_ready"] = True
-        logger.info("Biomedical NER model warmed up.")
+            model_readiness["ner_ready"] = True
+            logger.info("Biomedical NER model warmed up.")
+        else:
+            model_readiness["ner_ready"] = False
     except Exception as e:
+        model_readiness["ner_ready"] = False
         logger.warning("NER warmup encountered an error: %s", e)
 
     # 2. Summarization model warmup
@@ -128,17 +132,25 @@ def warmup_models() -> None:
                 early_stopping=False,
                 length_penalty=1.0,
             )
-        model_readiness["summarizer_ready"] = True
-        logger.info("Summarization model warmed up.")
+            model_readiness["summarizer_ready"] = True
+            logger.info("Summarization model warmed up.")
+        else:
+            model_readiness["summarizer_ready"] = False
+            logger.info("Summarizer model not available locally; deterministic fallback will be used.")
     except Exception as e:
+        model_readiness["summarizer_ready"] = False
         logger.warning("Summarizer warmup encountered an error: %s", e)
 
     # 3. PaddleOCR engine warmup
     try:
-        get_ocr_engine()
-        model_readiness["ocr_ready"] = True
-        logger.info("PaddleOCR engine warmed up.")
+        engine = get_ocr_engine()
+        if engine:
+            model_readiness["ocr_ready"] = True
+            logger.info("PaddleOCR engine warmed up.")
+        else:
+            model_readiness["ocr_ready"] = False
     except Exception as e:
+        model_readiness["ocr_ready"] = False
         logger.warning("PaddleOCR warmup encountered an error: %s", e)
 
     model_readiness["fully_ready"] = (
@@ -224,10 +236,12 @@ class UpdateStatusRequest(BaseModel):
     status: str = Field(..., pattern="^(Active|Suspended)$")
 
 
-def _execute_pipeline_in_worker_thread(temp_file_path: str, filename: str) -> Dict[str, Any]:
+def _execute_pipeline_in_worker_thread(
+    temp_file_path: str, filename: str, user_id: Optional[str] = "1"
+) -> Dict[str, Any]:
     """
     Synchronous CPU-bound pipeline execution running in a worker thread.
-    Enforces a strict 15-second processing budget with stage-level deadlines.
+    Enforces a processing budget with stage-level deadlines.
     Prevents blocking the main FastAPI asyncio event loop.
     Captures privacy-safe stage timings.
     """
@@ -245,6 +259,14 @@ def _execute_pipeline_in_worker_thread(temp_file_path: str, filename: str) -> Di
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Could not extract readable text from the document. Please ensure the file contains legible text.",
         )
+
+    # Check for existing duplicate report to prevent duplicate reports on client retries
+    resolved_uid = str(user_id) if user_id else "1"
+    existing_report = find_duplicate_report(resolved_uid, filename, cleaned_text)
+    if existing_report:
+        report_id = existing_report["report_id"]
+    else:
+        report_id = f"REP-{uuid.uuid4().hex[:8].upper()}"
 
     time_elapsed = time.time() - t_start
     time_remaining = PROCESSING_BUDGET_SECONDS - time_elapsed
@@ -265,9 +287,13 @@ def _execute_pipeline_in_worker_thread(temp_file_path: str, filename: str) -> Di
 
     # Stage 3: Medical Summarization with clinical verification
     t2 = time.time()
-    # If backend summarizer is ready, pass time_remaining minus 0.5s safety margin;
+    # If backend summarizer is ready and available, pass time_remaining minus 0.5s safety margin;
     # otherwise pass 0.0 to safely use deterministic fallback
-    sum_budget = max(0.0, time_remaining - 0.5) if model_readiness["summarizer_ready"] else 0.0
+    sum_budget = (
+        max(0.0, time_remaining - 0.5)
+        if (model_readiness["summarizer_ready"] and get_summarization_pipeline() is not None)
+        else 0.0
+    )
     summary = summarize_medical_info(extracted_info, source_text=cleaned_text, time_budget_seconds=sum_budget)
     t_sum = round(time.time() - t2, 3)
 
@@ -282,7 +308,13 @@ def _execute_pipeline_in_worker_thread(temp_file_path: str, filename: str) -> Di
         guidance.append(
             "Please seek professional medical review based on the flagged information."
         )
-        review_request = create_review_request(extracted_info, summary, risk_result)
+        review_request = create_review_request(
+            extracted_info,
+            summary,
+            risk_result,
+            patient_id=resolved_uid,
+            report_id=report_id,
+        )
     else:
         guidance.append(
             "Prepare questions for a doctor and bring relevant documents to your next consultation."
@@ -299,8 +331,6 @@ def _execute_pipeline_in_worker_thread(temp_file_path: str, filename: str) -> Di
         t_risk,
         t_total,
     )
-
-    report_id = f"REP-{uuid.uuid4().hex[:8].upper()}"
 
     disclaimer = (
         "This system does not diagnose conditions, prescribe medications, "
@@ -399,7 +429,8 @@ async def upload_document(
             content_length,
         )
 
-        # Offload synchronous CPU-heavy inference to dedicated worker thread with strict 15-second budget
+        # Offload synchronous CPU-heavy inference to dedicated worker thread with processing budget
+        user_id = current_user.get("id") if current_user else "1"
         try:
             loop = asyncio.get_running_loop()
             result = await asyncio.wait_for(
@@ -408,12 +439,12 @@ async def upload_document(
                     _execute_pipeline_in_worker_thread,
                     temp_file_path,
                     file.filename,
+                    user_id,
                 ),
                 timeout=PROCESSING_BUDGET_SECONDS,
             )
 
             # Downstream persistence: Save report to SQLite database off the main event loop
-            user_id = current_user.get("id") if current_user else "1"
             try:
                 await asyncio.to_thread(
                     save_report,
@@ -436,7 +467,7 @@ async def upload_document(
             logger.warning("Upload processing exceeded %.1fs budget timeout.", PROCESSING_BUDGET_SECONDS)
             raise HTTPException(
                 status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                detail="Processing timed out after 15 seconds. Please try a clearer or smaller document.",
+                detail=f"Processing timed out after {int(PROCESSING_BUDGET_SECONDS)} seconds. Please try a clearer or smaller document.",
             )
 
     finally:
@@ -814,6 +845,7 @@ def admin_list_doctors(
 
 
 @app.get("/api/system/stats")
+@app.get("/api/system-stats")
 def system_stats() -> Dict[str, Any]:
     """Provide real-time telemetry on system readiness, review queue, and service uptime."""
     conn = None

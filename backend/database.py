@@ -370,6 +370,25 @@ def get_report_by_id(report_id: str) -> Optional[Dict[str, Any]]:
         conn.close()
 
 
+def find_duplicate_report(user_id: str, filename: str, extracted_text: str) -> Optional[Dict[str, Any]]:
+    """
+    Find existing report for user with identical filename and extracted text
+    to prevent creating duplicate reports on client retries or re-uploads.
+    """
+    conn = get_db_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM reports WHERE user_id = ? AND filename = ? AND extracted_text = ? ORDER BY created_at DESC LIMIT 1;",
+            (str(user_id), filename, extracted_text)
+        ).fetchone()
+        if not row:
+            return None
+        return _format_report_row(row)
+    finally:
+        conn.close()
+
+
+
 def get_reports_by_user(user_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Retrieve all reports for a specific user, or all reports if user_id is None."""
     conn = get_db_connection()

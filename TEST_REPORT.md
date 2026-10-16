@@ -11,10 +11,12 @@
 | **`test_mediguide.py`** | Frozen AI Pipeline & Extraction Baseline | `pytest test_mediguide.py -v` | 33 | 33 | 0 | 0 | **PASSED** |
 | **`test_api.py`** | Gateway Endpoints & Error Handling | `pytest test_api.py -v` | 12 | 12 | 0 | 0 | **PASSED** |
 | **`test_downstream.py`** | Downstream Auth, RBAC, Persistence & Admin | `pytest test_downstream.py -v` | 19 | 19 | 0 | 0 | **PASSED** |
-| **Combined Regression** | Full Backend API & Downstream Test Suite | `pytest test_api.py test_downstream.py -v` | 31 | 31 | 0 | 0 | **PASSED** |
+| **`test_multilingual.py`** | 6-Language Indic Support, Translation & Script Detection | `pytest test_multilingual.py -v` | 15 | 15 | 0 | 0 | **PASSED** |
+| **`test_patient_agent.py`** | Multi-Turn Assistant, Deterministic Tools & Follow-Ups | `pytest test_patient_agent.py -v` | 20 | 20 | 0 | 0 | **PASSED** |
+| **Combined Downstream & Agent** | Full Backend API, Auth, Multilingual & Agent Suite | `pytest test_api.py test_downstream.py test_multilingual.py test_patient_agent.py` | 66 | 66 | 0 | 0 | **PASSED** |
 | **Frontend Production Build** | React 19 + Vite Production Bundle Verification | `npm run build` | 1 build | 1 | 0 | 0 | **PASSED** |
 
-**Total Automated Python Tests**: 64 tests | **Pass Rate**: 100.0% (64/64)
+**Total Automated Python Tests**: 99 tests | **Pass Rate**: 100.0% (99/99)
 
 ---
 
@@ -67,6 +69,40 @@
   - `test_admin_list_and_toggle_user_status`: Admins can list users and toggle account status (`Active` / `Suspended`).
   - `test_system_stats_telemetry_reflects_db`: System telemetry reflects persistent database counts and model readiness.
 
+### D. Multilingual Architecture & Localization (`test_multilingual.py` — 15 Tests)
+- `test_supported_languages_list`: Confirms all 6 supported language codes (`en`, `ta`, `hi`, `te`, `ml`, `kn`) and native script labels.
+- `test_api_languages_endpoint`: Verifies `/api/languages` metadata endpoint returns valid catalog.
+- `test_unicode_script_detection`: Validates accurate automatic script detection across Tamil, Hindi, Telugu, Malayalam, and Kannada.
+- `test_medical_measurements_and_units_preserved_during_translation`: Guarantees exact numerical measurements, units, and dates are never mutated or corrupted during translation.
+- `test_disclaimers_present_in_all_languages`: Ensures mandatory non-diagnostic disclaimers exist in all 6 languages.
+- `test_update_and_persist_language_preference`: Tests user language preference updates persisting to SQLite.
+- `test_login_returns_preferred_language`: Confirms user login sessions inherit preferred language settings.
+- `test_multilingual_emergency_escalation`: Validates emergency symptom detection in Indic scripts triggering immediate clinical escalation.
+- `test_report_translation_endpoint`: Confirms translated report views are generated on-the-fly without corrupting raw records in SQLite.
+- `test_report_translation_patient_isolation`: Enforces patient isolation across translated report queries (HTTP 403 on cross-patient access).
+
+### E. Patient Health Assistant & Multi-Turn Tools (`test_patient_agent.py` — 20 Tests)
+- `test_emergency_warning_translation_in_tamil_and_hindi`: Verifies emergency warnings are accurately translated into Tamil and Hindi.
+- `test_emergency_escalation_linked_to_correct_patient`: High-risk escalation records are linked to authenticated patient ID in SQLite.
+- `test_hemoglobin_retrieval_from_cbc_report`: Deterministic tool retrieves exact hemoglobin measurement without hallucination.
+- `test_blood_pressure_retrieval_from_correct_report`: Retrieves blood pressure from authorized diagnostic report.
+- `test_missing_measurement_fallback`: Gracefully states when a metric was not found and lists available tests without inventing numbers.
+- `test_multiple_report_selection_and_routing`: Respects explicit report IDs and disambiguates between multiple patient documents.
+- `test_greetings_not_invoking_document_processing`: Conversational pleasantries do not trigger OCR or false escalation tickets.
+- `test_general_questions_not_creating_false_review_tickets`: General queries return informative guidance without clinical escalation.
+- `test_unauthorized_report_access_rejected`: Cross-patient report inspection is rejected with HTTP access denied.
+- `test_unauthenticated_personal_queries_rejected`: Prompts unauthenticated requests to log in before viewing personal data.
+- `test_medication_prescription_and_diagnosis_refusal`: Safely refuses autonomous diagnostic and medication prescribing requests.
+- `test_existing_api_endpoint_and_pipeline_compatibility`: Backward compatibility verification on `/api/process-text`.
+- `test_contextual_followup_is_that_normal_hemoglobin`: Resolves multi-turn "Is that normal?" follow-up with grounded reference intervals.
+- `test_contextual_followup_is_that_normal_high_blood_pressure`: Identifies hypertensive crisis and advises clinical review.
+- `test_contextual_followup_when_was_that`: Extracts test date from active conversation context.
+- `test_contextual_followup_which_doctor_to_see`: Recommends appropriate medical specialist (General Physician, Cardiologist, Hematologist).
+- `test_sequential_metric_query_same_report`: Multi-turn sequential metric queries smoothly target active report context.
+- `test_contextual_followup_other_tests_in_report`: Lists other available laboratory measurements from the report.
+- `test_multilingual_contextual_followup_tamil`: Grounded multi-turn conversation and follow-up in Tamil script.
+- `test_emergency_overrides_multi_turn_context`: Sudden emergency symptoms override active conversation context for immediate escalation.
+
 ---
 
 ## 3. Frontend Production Build Verification
@@ -77,12 +113,12 @@
 
 vite v8.3.3 building client environment for production...
 transforming...
-✓ 2907 modules transformed.
+✓ 2910 modules transformed.
 rendering chunks...
 computing gzip size...
 dist/index.html                   0.45 kB │ gzip:   0.29 kB
-dist/assets/index-6m-6dx22.css   30.71 kB │ gzip:   6.12 kB
-dist/assets/index-BoBcCAjJ.js   877.24 kB │ gzip: 255.68 kB
-✓ built in 8.61s
+dist/assets/index-Ba7aLgpR.css   31.31 kB │ gzip:   6.32 kB
+dist/assets/index-CIwjWLsJ.js   939.64 kB │ gzip: 271.08 kB
+✓ built in 23.50s
 Exit Code: 0 (SUCCESS)
 ```

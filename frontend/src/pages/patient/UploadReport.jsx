@@ -7,7 +7,8 @@ import { useLanguage } from '../../context/LanguageContext';
 const SUPPORTED_FORMATS = ['.png', '.jpg', '.jpeg', '.pdf', '.bmp', '.tiff'];
 const MAX_SIZE_MB = 10;
 const MAX_SIZE_BYTES = MAX_SIZE_MB * 1024 * 1024;
-const UPLOAD_TIMEOUT_MS = 20000; // 20 seconds timeout aligned with backend 15-second budget
+const UPLOAD_TIMEOUT_MS = 45000; // 45 seconds timeout aligned with backend budget
+
 
 const UploadReport = () => {
   const navigate = useNavigate();
