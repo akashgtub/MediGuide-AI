@@ -11,6 +11,9 @@ import {
   User,
   Info,
   CheckCircle2,
+  FileText,
+  Activity,
+  ExternalLink,
 } from 'lucide-react';
 import { useAuth, apiFetch } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
@@ -117,7 +120,10 @@ const PatientAssistant = () => {
         text: data.translated_summary || 'I have analyzed the provided medical context.',
         guidance: data.guidance || [],
         reviewRequest: data.review_request,
-        disclaimer: data.disclaimer || 'This system does not diagnose or prescribe.',
+        disclaimer: data.disclaimer || '',
+        reportList: data.report_list || null,
+        metricData: data.metric_data || null,
+        intent: data.intent || null,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
 
@@ -197,20 +203,78 @@ const PatientAssistant = () => {
           return (
             <div key={m.id} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
               <div
-                className={`max-w-[85%] rounded-2xl p-4 space-y-2 text-sm shadow-sm ${
+                className={`max-w-[85%] rounded-2xl p-4 space-y-2.5 text-sm shadow-sm ${
                   isUser
                     ? 'bg-teal-600 text-white rounded-br-none'
-                    : 'bg-slate-50 border border-slate-100 text-slate-800 rounded-tl-none'
+                    : 'bg-slate-50 border border-slate-200/80 text-slate-800 rounded-tl-none'
                 }`}
               >
                 <div className="flex items-center justify-between space-x-2 text-[11px] opacity-75 mb-1">
                   <span className="font-semibold">{isUser ? 'You' : 'MediGuide Assistant'}</span>
-                  <span>{m.timestamp}</span>
+                  <span className="font-mono">{m.timestamp}</span>
                 </div>
 
                 <p className="leading-relaxed whitespace-pre-wrap">{m.text}</p>
 
-                {/* Guidance items */}
+                {/* Metric Highlight Card */}
+                {m.metricData && (
+                  <div className="mt-2.5 p-3 bg-white border border-teal-200 rounded-xl space-y-1 shadow-2xs">
+                    <div className="flex items-center justify-between text-teal-900 font-semibold text-xs">
+                      <span className="flex items-center">
+                        <Activity className="w-3.5 h-3.5 text-teal-600 mr-1.5" />
+                        {m.metricData.metric}
+                      </span>
+                      {m.metricData.date && (
+                        <span className="text-[10px] text-slate-400 font-mono">{m.metricData.date}</span>
+                      )}
+                    </div>
+                    <div className="flex items-baseline space-x-1.5 py-0.5">
+                      <span className="text-xl font-bold font-mono text-slate-900">
+                        {m.metricData.value}
+                      </span>
+                      <span className="text-xs text-slate-500 font-mono font-medium">
+                        {m.metricData.unit}
+                      </span>
+                    </div>
+                    {m.metricData.filename && (
+                      <p className="text-[10px] text-slate-400 truncate">
+                        Source: {m.metricData.filename}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Compact Interactive Report List */}
+                {m.reportList && m.reportList.length > 0 && (
+                  <div className="mt-2.5 pt-2 border-t border-slate-200/80 space-y-2">
+                    <p className="text-[11px] font-bold text-slate-600 uppercase tracking-wider flex items-center">
+                      <FileText className="w-3.5 h-3.5 text-teal-600 mr-1" />
+                      Uploaded Reports ({m.reportList.length})
+                    </p>
+                    <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
+                      {m.reportList.map((r, idx) => (
+                        <div
+                          key={idx}
+                          className="flex items-center justify-between bg-white border border-slate-200 hover:border-teal-400 p-2 rounded-xl transition-all shadow-2xs text-xs"
+                        >
+                          <div className="truncate pr-2">
+                            <p className="font-semibold text-slate-800 truncate">{r.filename}</p>
+                            <p className="text-[10px] text-slate-400">{r.created_at || 'Recent'}</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleSend(`Summarize my ${r.filename}`)}
+                            className="bg-teal-50 hover:bg-teal-600 text-teal-700 hover:text-white px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors shrink-0"
+                          >
+                            Summarize
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Guidance items (only when non-empty) */}
                 {m.guidance && m.guidance.length > 0 && (
                   <div className={`mt-2 pt-2 border-t text-xs ${isUser ? 'border-teal-500/50' : 'border-slate-200'} space-y-1`}>
                     <p className="font-semibold flex items-center space-x-1">
@@ -238,8 +302,8 @@ const PatientAssistant = () => {
                   </div>
                 )}
 
-                {/* Non-diagnostic disclaimer */}
-                {m.disclaimer && (
+                {/* Non-diagnostic disclaimer (only when non-empty) */}
+                {m.disclaimer && m.disclaimer.trim().length > 0 && (
                   <p className="text-[10px] text-slate-400 italic pt-1 border-t border-slate-100">
                     {m.disclaimer}
                   </p>

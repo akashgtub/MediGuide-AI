@@ -487,9 +487,9 @@ def process_text_endpoint(
     """Process plain text clinical narrative through multilingual patient agent pipeline."""
     user_id = current_user.get("id") if current_user else None
 
-    # If target_language is default or unspecified, use patient preference if available
+    # If target_language is omitted, use patient preference if available
     target_lang = payload.target_language
-    if (not target_lang or target_lang == "en") and current_user and current_user.get("preferred_language"):
+    if not target_lang and current_user and current_user.get("preferred_language"):
         target_lang = current_user.get("preferred_language")
 
     result = process_patient_request(

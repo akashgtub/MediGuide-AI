@@ -26,6 +26,7 @@ from ai.translator import (
     SUPPORTED_LANGUAGES,
     DEFAULT_LANGUAGE,
     CLINICAL_DISCLAIMERS,
+    CONVERSATIONAL_RESPONSES,
 )
 from ai.agent_tools import (
     tool_get_user_reports,
@@ -200,26 +201,190 @@ def _detect_followup_type(text: str) -> Optional[str]:
     return None
 
 
-def _detect_greeting_or_general(text: str) -> bool:
-    """Check if text is a greeting, capability query, or pleasantry."""
-    text_clean = re.sub(r'[^\w\s]', ' ', text.lower()).strip()
-    # Prescribing and autonomous diagnosis requests must be refused
-    if any(p in text_clean for p in PRESCRIBE_DIAGNOSE_PATTERNS):
-        return True
+def _detect_user_introduction(text: str) -> Optional[str]:
+    """
+    Detect if user is introducing themselves (e.g. 'I am Akash', 'My name is Akash').
+    Returns capitalized name if found, or None.
+    """
+    text_clean = text.strip()
+    symptom_words = [
+        "feeling", "having", "sick", "tired", "unwell", "ill", "suffering", "experiencing",
+        "taking", "prescribed", "diagnosed", "in pain", "hurt", "bleeding"
+    ]
+    text_lower = text_clean.lower()
+    if any(sw in text_lower for sw in symptom_words):
+        return None
 
-    # If the user is asking about a specific lab metric or follow-up, do not treat as greeting
-    if _detect_metric_inquiry(text) or _detect_followup_type(text):
+    # English patterns
+    m_en = re.search(
+        r'^(?:(?:hello|hi|hey|good\s+(?:morning|afternoon|evening))[\s,!]*)?(?:i\s*am|i\'m|my\s+name\s+is|myself|this\s+is|call\s+me)\s+([a-zA-Z\u0B80-\u0DFF\u0900-\u097F]+)',
+        text_clean,
+        re.IGNORECASE
+    )
+    if m_en:
+        name = m_en.group(1).strip()
+        if name.lower() not in ("a", "an", "the", "not", "just", "here", "fine", "ok", "okay", "patient", "doctor"):
+            return name.capitalize()
+
+    # Tamil patterns: "என் பெயர் ஆகாஷ்", "நான் ஆகாஷ்"
+    m_ta = re.search(r'^(?:வணக்கம்[\s,!]*)?(?:என்\s*பெயர்|நான்)\s+([^\s,!\.]+)', text_clean)
+    if m_ta:
+        return m_ta.group(1).strip()
+
+    # Hindi patterns: "मेरा नाम आकाश है", "मैं आकाश हूँ"
+    m_hi = re.search(r'^(?:नमस्ते[\s,!]*)?(?:मेरा\s*नाम|मैं)\s+([^\s,!\.]+)(?:\s*(?:हूँ|हूं|है))?', text_clean)
+    if m_hi:
+        name = m_hi.group(1).strip()
+        if name not in ("यहाँ", "ठीक", "एक"):
+            return name
+
+    return None
+
+
+def _detect_identity_intent(text: str) -> bool:
+    """Check if message is asking about the assistant's name, identity, or capabilities."""
+    text_clean = re.sub(r'[^\w\s\u0900-\u0D7F]', ' ', text.lower()).strip()
+    identity_phrases = [
+        "what is your name", "what s your name", "whats your name", "who are you",
+        "what can you do", "what are you", "who made you", "tell me about yourself",
+        "how can you help me", "what is mediguide", "who is mediguide", "what do you do",
+        # Tamil
+        "உங்கள் பெயர் என்ன", "நீங்கள் யார்", "நீங்கள் என்ன செய்ய முடியும்", "உன் பெயர் என்ன",
+        # Hindi
+        "आपका नाम क्या है", "आप कौन हैं", "आप क्या कर सकते हैं", "तुम्हारा नाम क्या है",
+        # Telugu
+        "మీ పేరు ఏమిటి", "మీరు ఎవరు", "మీరు ఏమి చేయగలరు",
+        # Malayalam
+        "നിങ്ങളുടെ പേര് എന്താണ്", "നിങ്ങൾ ആരാണ്", "നിങ്ങൾക്ക് എന്ത് ചെയ്യാൻ കഴിയും",
+        # Kannada
+        "ನಿಮ್ಮ ಹೆಸರು ಏನು", "ನೀವು ಯಾರು", "ನೀವು ಏನು ಮಾಡಬಹುದು",
+    ]
+    return any(p in text_clean for p in identity_phrases)
+
+
+def _detect_greeting_intent(text: str) -> bool:
+    """Check if message is a conversational greeting without personal health questions."""
+    text_clean = re.sub(r'[^\w\s\u0900-\u0D7F]', ' ', text.lower()).strip()
+    words = text_clean.split()
+    if len(words) > 4:
         return False
 
-    # Check if text is just a greeting or pleasantry
-    for g in GREETING_PATTERNS:
+    # Prescribing and autonomous diagnosis requests must be refused, not treated as simple greeting
+    if any(p in text_clean for p in PRESCRIBE_DIAGNOSE_PATTERNS):
+        return False
+
+    greeting_words = [
+        "hi", "hello", "hey", "good morning", "good evening", "good afternoon",
+        "greetings", "hey there", "hello there",
+        "வணக்கம்", "नमस्ते", "నమస్కారం", "നമസ്കാരം", "ನಮಸ್ಕಾರ",
+    ]
+    for g in greeting_words:
         if text_clean == g or text_clean.startswith(g + " ") or text_clean.endswith(" " + g):
-            words = text_clean.split()
-            if len(words) <= 4:
-                return True
-            if any(w in text_clean for w in ["who are you", "what can you do", "help", "how can you help"]):
-                return True
+            return True
     return False
+
+
+def _detect_report_list_intent(text: str) -> bool:
+    """Check if message explicitly requests a listing of uploaded reports."""
+    text_lower = text.lower().strip()
+    list_phrases = [
+        "show my reports", "list my reports", "list my uploaded reports", "show my uploaded reports",
+        "what reports do i have", "my reports", "show uploaded reports", "view my reports",
+        "see my reports", "get my reports", "list reports", "show reports", "all my reports",
+        "my uploaded reports", "list all reports", "show all reports", "show all my reports",
+        "அறிக்கைகளைக் காட்டு", "என் அறிக்கைகள்", "அறிக்கைகள் பட்டியல்",
+        "मेरी रिपोर्ट दिखाओ", "मेरी रिपोर्टें", "रिपोर्ट की सूची",
+        "నా నివేదికలను చూపించు", "నా రిపోర్టులు",
+        "എന്റെ റിപ്പോർട്ടുകൾ കാണിക്കുക", "റിപ്പോർട്ടുകൾ",
+        "ನನ್ನ ವರದಿಗಳನ್ನು ತೋರಿಸಿ", "ವರದಿಗಳ ಪಟ್ಟಿ",
+    ]
+    return any(p in text_lower for p in list_phrases)
+
+
+def _detect_general_medical_education(text: str) -> bool:
+    """
+    Check if query is general health/medical education (e.g. disease information)
+    that must NOT trigger personal report retrieval.
+    """
+    text_lower = text.lower().strip()
+
+    # Never treat queries with personal possessives about user's own data as general education
+    personal_markers = ["my report", "my hemoglobin", "my blood pressure", "my result", "my test", "in my report", "my reading", "my value"]
+    if any(pm in text_lower for pm in personal_markers):
+        return False
+
+    general_disease_queries = [
+        "most dangerous disease", "deadliest disease", "worst disease", "deadly disease",
+        "dangerous disease", "most dangerous",
+        "what is hypertension", "what is high blood pressure", "tell me about hypertension",
+        "what causes high blood pressure", "what is diabetes", "what is anemia",
+        "what causes low hemoglobin", "what is cancer", "what is cholesterol",
+        "what causes high cholesterol", "what is asthma", "what is a normal heart rate",
+        "what is a stroke", "what is a heart attack", "symptoms of diabetes",
+        "symptoms of hypertension", "causes of anemia", "causes of hypertension",
+        "மிகவும் ஆபத்தான நோய் எது", "உயர் இரத்த அழுத்தம் என்றால் என்ன", "நீரிழிவு நோய் என்றால் என்ன",
+        "सबसे खतरनाक बीमारी कौन सी है", "उच्च रक्तचाप क्या है", "मधुमेह क्या है",
+    ]
+    if any(q in text_lower for q in general_disease_queries):
+        return True
+
+    # General question pattern: "what is <condition>", "what causes <condition>"
+    if re.search(r'\bwhat\s+(?:is|causes|are\s+the\s+symptoms\s+of)\s+[a-z\s]+\b', text_lower):
+        if not any(w in text_lower for w in ["my", "mine", "me", "i have"]):
+            return True
+
+    return False
+
+
+def _detect_risk_question_intent(text: str) -> bool:
+    """
+    Check if message is asking whether a specific result/value/report is normal,
+    concerning, or requires clinical follow-up.
+    """
+    text_lower = text.lower().strip()
+    if _detect_followup_type(text) is not None:
+        return True
+
+    if "most dangerous disease" in text_lower or "deadliest disease" in text_lower:
+        return False
+
+    risk_terms = [
+        "concerning", "is this result concerning", "is that value normal", "is that normal",
+        "is my reading normal", "is that high", "is that low", "should i be worried",
+        "is my report dangerous", "is this normal", "is that reading dangerous",
+        "is it elevated", "is that bad", "is that good", "is this value normal",
+        "அது சாதாரணமானதா", "இது ஆபத்தானதா", "என்ன ஆபத்து",
+        "क्या यह सामान्य है", "क्या यह खतरनाक है",
+    ]
+    return any(rt in text_lower for rt in risk_terms)
+
+
+def _detect_report_overview_intent(text: str) -> bool:
+    """Check if message is an explicit request to summarize or explain a medical report."""
+    text_lower = text.lower().strip()
+    overview_phrases = [
+        "summarize my cbc report", "explain my report", "explain my cbc report",
+        "what does my general health report show", "overview of my report",
+        "summarize my report", "what do my test results say", "explain my test results",
+        "summarize my test results", "summarize my general health report",
+        "explain my general health report", "what does my report say",
+        "what does my report show", "tell me about my report",
+        "என் அறிக்கையை விளக்குங்கள்", "என் அறிக்கையை சுருக்கவும்",
+        "मेरी रिपोर्ट समझाओ", "मेरी रिपोर्ट का सारांश",
+        "నా రిపోర్ట్‌ను వివరించండి",
+    ]
+    if any(p in text_lower for p in overview_phrases):
+        return True
+
+    if any(w in text_lower for w in ["summarize", "explain", "overview"]) and any(r in text_lower for r in ["report", "results", "findings"]):
+        return True
+
+    return False
+
+
+def _detect_greeting_or_general(text: str) -> bool:
+    """Backward compatibility wrapper for greeting or capability check."""
+    return _detect_greeting_intent(text) or _detect_identity_intent(text)
 
 
 def _detect_document_narrative(text: str) -> bool:
@@ -436,50 +601,63 @@ def classify_patient_intent(
 ) -> str:
     """
     Deterministic intent router for patient assistant messages.
-    Returns one of:
-    - EMERGENCY
-    - GREETING_OR_GENERAL
-    - CONTEXTUAL_FOLLOWUP
-    - REPORT_SPECIFIC_METRIC
-    - REPORT_OVERVIEW
-    - RISK_QUESTION
-    - DOCUMENT_NARRATIVE
-    - UNSUPPORTED_OR_UNCLEAR
+    Returns one of the 11 supported intents:
+    1. EMERGENCY: potentially urgent symptoms.
+    2. IDENTITY: what is your name, who are you, what can you do?
+    3. USER_INTRODUCTION: my name is Akash, I am Akash.
+    4. GENERAL_MEDICAL_EDUCATION: what is the most dangerous disease, what is hypertension?
+    5. REPORT_LIST: show my reports, list my uploaded reports.
+    6. REPORT_METRIC_QUERY: what was my hemoglobin, what is my blood pressure?
+    7. REPORT_OVERVIEW: summarize my CBC report, explain my report.
+    8. RISK_QUESTION: is this result concerning, is that value normal?
+    9. DOCUMENT_NARRATIVE: explicit clinical record text / multiline document text.
+    10. GREETING: hi, hello, hey, good morning.
+    11. UNCLEAR: questions that cannot be safely classified.
     """
     if not text or not text.strip():
-        return "UNSUPPORTED_OR_UNCLEAR"
+        return "UNCLEAR"
 
     # Priority 1: Clinical Emergency
     if _detect_emergency_intent(text):
         return "EMERGENCY"
 
-    # Priority 2: Prescribing / Diagnosing refusal or Greeting
-    if _detect_greeting_or_general(text):
-        return "GREETING_OR_GENERAL"
+    # Priority 2: User Introduction ("I am Akash", "My name is Akash")
+    if _detect_user_introduction(text) is not None:
+        return "USER_INTRODUCTION"
 
-    # Priority 3: Follow-up queries (e.g. "Is that normal?", "When was that?", "Which doctor should I see?")
-    followup_type = _detect_followup_type(text)
-    if followup_type is not None:
-        return "CONTEXTUAL_FOLLOWUP"
+    # Priority 3: Identity / Capabilities / Prescribing refusal
+    if _detect_identity_intent(text) or any(p in text.lower() for p in PRESCRIBE_DIAGNOSE_PATTERNS):
+        return "IDENTITY"
 
-    # Priority 4: Metric lookup (e.g., "What was my hemoglobin value?")
+    # Priority 4: Explicit Report Listing ("show my reports", "list my uploaded reports")
+    if _detect_report_list_intent(text):
+        return "REPORT_LIST"
+
+    # Priority 5: General Medical Education ("what is the most dangerous disease", "what is hypertension")
+    if _detect_general_medical_education(text):
+        return "GENERAL_MEDICAL_EDUCATION"
+
+    # Priority 6: Report Metric Query ("what was my hemoglobin", "what is my blood pressure")
     if _detect_metric_inquiry(text):
-        return "REPORT_SPECIFIC_METRIC"
+        return "REPORT_METRIC_QUERY"
 
-    # Priority 5: Risk / Danger inquiry
-    text_lower = text.lower()
-    if any(p in text_lower for p in RISK_QUERY_PATTERNS):
-        return "RISK_QUESTION"
-
-    # Priority 6: Report overview / summary inquiry
-    if any(p in text_lower for p in REPORT_OVERVIEW_PATTERNS):
+    # Priority 7: Report Overview / Summary ("summarize my CBC report", "explain my report")
+    if _detect_report_overview_intent(text):
         return "REPORT_OVERVIEW"
 
-    # Priority 7: Explicit Document Narrative Text
+    # Priority 8: Risk Question or Contextual Follow-up ("is this normal", "is that concerning", "when was that")
+    if _detect_risk_question_intent(text):
+        return "RISK_QUESTION"
+
+    # Priority 9: Explicit Document Narrative Text (OCR record, lab results text)
     if _detect_document_narrative(text):
         return "DOCUMENT_NARRATIVE"
 
-    return "UNSUPPORTED_OR_UNCLEAR"
+    # Priority 10: Greeting ("hi", "hello", "good morning")
+    if _detect_greeting_intent(text):
+        return "GREETING"
+
+    return "UNCLEAR"
 
 
 def process_patient_request(
@@ -495,7 +673,7 @@ def process_patient_request(
     Preserves exact backward compatibility with test_mediguide.py.
     """
     raw_query = (document_text or "").strip()
-    
+
     # 1. Detect input language and resolve target language
     detected_lang = detect_language(raw_query)
     effective_target_lang = target_language.lower().strip() if target_language else DEFAULT_LANGUAGE
@@ -518,6 +696,9 @@ def process_patient_request(
     review_request = None
     summary_en = ""
     guidance_en = []
+    report_list = None
+    metric_data = None
+    include_disclaimer = True
 
     # =========================================================================
     # INTENT: EMERGENCY
@@ -539,13 +720,11 @@ def process_patient_request(
             "entities": [],
             "inferred_info": [],
         }
-        # Harmonized emergency warning matching CLINICAL_DISCLAIMERS in translator.py
         summary_en = "Warning: Severe medical symptoms detected. Emergency clinical intervention is advised."
         guidance_en = [
             "Please seek professional medical review based on the flagged information.",
             "Seek immediate emergency medical attention.",
         ]
-        # Link emergency escalation to authenticated patient and report ID if available
         review_request = create_review_request(
             extracted_info=extracted_info,
             summary=summary_en,
@@ -553,11 +732,25 @@ def process_patient_request(
             patient_id=user_id,
             report_id=report_id or conversation_context.get("last_report_id"),
         )
+        include_disclaimer = True
 
     # =========================================================================
-    # INTENT: GREETING OR GENERAL / PRESCRIBING REFUSAL
+    # INTENT: USER_INTRODUCTION
     # =========================================================================
-    elif intent == "GREETING_OR_GENERAL":
+    elif intent == "USER_INTRODUCTION":
+        user_name = _detect_user_introduction(raw_query)
+        if user_name:
+            summary_en = f"Nice to meet you, {user_name}! How can I help you today?"
+        else:
+            summary_en = CONVERSATIONAL_RESPONSES["user_intro_default"]["en"]
+        guidance_en = []
+        include_disclaimer = False
+        review_request = None
+
+    # =========================================================================
+    # INTENT: IDENTITY (or Prescribing / Diagnosing refusal)
+    # =========================================================================
+    elif intent == "IDENTITY":
         q_lower = raw_query.lower()
         if any(p in q_lower for p in PRESCRIBE_DIAGNOSE_PATTERNS):
             summary_en = (
@@ -565,26 +758,236 @@ def process_patient_request(
                 "diagnose conditions, or recommend specific treatments. Please consult a licensed healthcare provider."
             )
             guidance_en = ["Consult a licensed doctor or pharmacist for prescription medications and formal medical diagnosis."]
+            include_disclaimer = True
         else:
-            summary_en = (
-                "Hello! I am your MediGuide-AI assistant. You can ask me questions about your uploaded "
-                "medical reports, specific test results, or next steps for your doctor's visit."
-            )
-            guidance_en = [
-                "Prepare questions for a doctor and bring relevant documents to your next consultation.",
-                "Bring this document to your next doctor consultation."
-            ]
+            summary_en = CONVERSATIONAL_RESPONSES["identity"]["en"]
+            guidance_en = []
+            include_disclaimer = False
         review_request = None
 
     # =========================================================================
-    # INTENT: CONTEXTUAL FOLLOW-UP
+    # INTENT: GREETING
     # =========================================================================
-    elif intent == "CONTEXTUAL_FOLLOWUP":
+    elif intent == "GREETING":
+        summary_en = CONVERSATIONAL_RESPONSES["hello_greeting"]["en"]
+        guidance_en = []
+        include_disclaimer = False
+        review_request = None
+
+    # =========================================================================
+    # INTENT: GENERAL_MEDICAL_EDUCATION
+    # =========================================================================
+    elif intent == "GENERAL_MEDICAL_EDUCATION":
+        q_lower = raw_query.lower()
+        if any(w in q_lower for w in [
+            "most dangerous", "deadliest", "worst disease", "deadly disease", "dangerous disease",
+            "மிகவும் ஆபத்தான", "सबसे खतरनाक", "అత్యంత ప్రమాదకరమైన", "ഏറ്റവും അപകടകരമായ", "ಅತ್ಯಂತ ಅಪಾಯಕಾರಿ"
+        ]):
+            summary_en = CONVERSATIONAL_RESPONSES["most_dangerous_disease"]["en"]
+        elif any(w in q_lower for w in [
+            "hypertension", "high blood pressure",
+            "உயர் இரத்த அழுத்தம்", "उच्च रक्तचाप", "రక్తపోటు", "രക്താതിമർദ്ദം", "ರಕ್ತದೊತ್ತಡ"
+        ]):
+            summary_en = CONVERSATIONAL_RESPONSES["hypertension_education"]["en"]
+        else:
+            summary_en = (
+                "General medical information is provided for educational purposes. Severity and outcomes depend on "
+                "individual clinical history, complications, and timely professional medical care. "
+                "Would you like general health education about a specific condition, or help understanding a particular medical report?"
+            )
+        guidance_en = ["Prepare questions for your doctor regarding any health symptoms or conditions you wish to discuss."]
+        include_disclaimer = True
+        review_request = None
+
+    # =========================================================================
+    # INTENT: REPORT_LIST
+    # =========================================================================
+    elif intent == "REPORT_LIST":
+        if not user_id:
+            summary_en = "Authentication is required to view your uploaded reports. Please log in to your patient account."
+            guidance_en = ["Log in with your patient account credentials to inspect verified medical reports."]
+            report_list = []
+        else:
+            user_reports = tool_get_user_reports(user_id=user_id)
+            if not user_reports:
+                summary_en = "You do not have any uploaded medical reports in your account yet. You can upload a diagnostic document in 'Upload Report'."
+                guidance_en = ["Navigate to 'Upload Report' to analyze a diagnostic report."]
+                report_list = []
+            else:
+                total_count = len(user_reports)
+                recent_reports = user_reports[:5]
+                titles = [f"- {r['filename']} ({r['created_at'][:10]})" for r in recent_reports]
+                more_suffix = f"\n...and {total_count - 5} older report(s)." if total_count > 5 else ""
+                summary_en = (
+                    f"You have {total_count} uploaded report(s) on file:\n"
+                    + "\n".join(titles)
+                    + more_suffix
+                    + "\n\nYou can ask me to summarize any report or check specific lab values."
+                )
+                guidance_en = ["Select a report to see its summary or ask about specific lab measurements."]
+                report_list = [
+                    {
+                        "report_id": r["report_id"],
+                        "filename": r["filename"],
+                        "created_at": r.get("created_at", "")[:10]
+                    }
+                    for r in user_reports[:10]
+                ]
+        include_disclaimer = True
+        review_request = None
+
+    # =========================================================================
+    # INTENT: REPORT_METRIC_QUERY
+    # =========================================================================
+    elif intent == "REPORT_METRIC_QUERY":
+        if not user_id:
+            summary_en = "Authentication is required to access your personal medical reports. Please log in to view your test results."
+            guidance_en = ["Log in with your patient account credentials to inspect verified medical reports."]
+            review_request = None
+        else:
+            effective_rep_id = report_id or conversation_context.get("last_report_id")
+            metric_res = tool_find_metric(user_id=user_id, report_id=effective_rep_id, query=raw_query)
+
+            if not metric_res.get("found") and effective_rep_id:
+                all_res = tool_find_metric(user_id=user_id, report_id=None, query=raw_query)
+                if all_res.get("found"):
+                    metric_res = all_res
+
+            if metric_res.get("found"):
+                metric_name = metric_res.get("metric", "Test")
+                val = metric_res.get("value", "")
+                unit = metric_res.get("unit", "")
+                fname = metric_res.get("filename", "Report")
+                dt = metric_res.get("date", "")
+                date_snippet = f" (recorded on {dt})" if dt else ""
+
+                summary_en = (
+                    f"In your report ({fname}{date_snippet}): "
+                    f"{metric_name} is recorded as {val} {unit}. "
+                    "This system presents recorded values without clinical interpretation. "
+                    "Please discuss what this value means for your individual health with your physician."
+                )
+                guidance_en = [
+                    f"Bring this {metric_name} record to your next clinical appointment.",
+                    "Prepare questions for your doctor regarding your target reference ranges."
+                ]
+                metric_data = {
+                    "metric": metric_name,
+                    "value": val,
+                    "unit": unit,
+                    "filename": fname,
+                    "date": dt,
+                }
+                review_request = None
+            elif metric_res.get("error") == "no_reports":
+                summary_en = "You do not have any uploaded medical reports in your account yet. Please upload a report to inspect your results."
+                guidance_en = ["Navigate to 'Upload Report' to analyze a diagnostic report."]
+                review_request = None
+            elif metric_res.get("error") == "unauthorized_or_not_found":
+                summary_en = "Access denied. You do not have permission to view this medical report or it could not be found."
+                guidance_en = ["Ensure you are logged into the correct patient account."]
+                review_request = None
+            else:
+                avail = metric_res.get("available_tests", [])
+                avail_str = f" Available tests found in your reports: {', '.join(avail)}." if avail else ""
+                searched_fname = metric_res.get("filename")
+                scope_str = f"in report ({searched_fname})" if searched_fname else "across your uploaded reports"
+                req_metric = metric_res.get("metric", "the requested test")
+
+                summary_en = (
+                    f"We could not find a recorded measurement for '{req_metric}' {scope_str}.{avail_str} "
+                    "Please verify the spelling or check if this test was included in your uploaded document."
+                )
+                guidance_en = [
+                    "Check the test name in your physical laboratory document.",
+                    "Upload a clearer image or document if this test was present in your lab results."
+                ]
+                review_request = None
+        include_disclaimer = True
+
+    # =========================================================================
+    # INTENT: REPORT_OVERVIEW
+    # =========================================================================
+    elif intent == "REPORT_OVERVIEW":
+        if not user_id:
+            summary_en = "Authentication is required to access your personal medical reports. Please log in to view your test results."
+            guidance_en = ["Please log in to your patient account to access your report summary."]
+            review_request = None
+        else:
+            user_reports = tool_get_user_reports(user_id=user_id)
+            if not user_reports:
+                summary_en = "You do not have any uploaded medical reports in your account yet. Please upload a report to inspect your results."
+                guidance_en = ["Upload your diagnostic document in 'Upload Report' to generate an educational summary."]
+                review_request = None
+            else:
+                target_report_id = report_id or conversation_context.get("last_report_id")
+                if not target_report_id:
+                    if len(user_reports) > 1:
+                        q_lower = raw_query.lower()
+                        matched = None
+                        for r in user_reports:
+                            fname_clean = r["filename"].lower()
+                            tests = [t.lower() for t in r.get("test_names", [])]
+                            if any(w in q_lower for w in fname_clean.replace(".", " ").replace("_", " ").split() if len(w) > 2):
+                                matched = r
+                                break
+                            if any(t in q_lower for t in tests if len(t) > 2):
+                                matched = r
+                                break
+
+                        if matched:
+                            target_report_id = matched["report_id"]
+                        else:
+                            titles = [f"'{r['filename']}' ({r['created_at'][:10]})" for r in user_reports[:3]]
+                            more_cnt = len(user_reports) - 3
+                            more_str = f" and {more_cnt} more" if more_cnt > 0 else ""
+                            summary_en = (
+                                f"You have {len(user_reports)} reports available (including {', '.join(titles)}{more_str}). "
+                                "Which report would you like me to summarize or explain?"
+                            )
+                            guidance_en = ["Specify the report name or date you would like to discuss."]
+                            report_list = [
+                                {
+                                    "report_id": r["report_id"],
+                                    "filename": r["filename"],
+                                    "created_at": r.get("created_at", "")[:10]
+                                }
+                                for r in user_reports[:5]
+                            ]
+                            return {
+                                "intent": intent,
+                                "translated_summary": translate_text(summary_en, effective_target_lang),
+                                "guidance": [translate_text(g, effective_target_lang) for g in guidance_en],
+                                "review_request": None,
+                                "disclaimer": CLINICAL_DISCLAIMERS["short_disclaimer"].get(effective_target_lang, CLINICAL_DISCLAIMERS["short_disclaimer"]["en"]),
+                                "detected_language": detected_lang,
+                                "response_language": effective_target_lang,
+                                "original_query": raw_query,
+                                "report_list": report_list,
+                                "metric_data": None,
+                            }
+                    else:
+                        target_report_id = user_reports[0]["report_id"]
+
+                report_data = tool_get_report_summary(user_id=user_id, report_id=target_report_id)
+                if not report_data:
+                    summary_en = "Access denied or the specified report could not be found."
+                    guidance_en = ["Please verify your report selection."]
+                    review_request = None
+                else:
+                    summary_en = report_data.get("summary", "")
+                    guidance_en = report_data.get("guidance", ["Bring this document to your next doctor consultation."])
+                    review_request = None
+        include_disclaimer = True
+
+    # =========================================================================
+    # INTENT: RISK_QUESTION
+    # =========================================================================
+    elif intent == "RISK_QUESTION":
         ftype = _detect_followup_type(raw_query)
 
         # A. Normality or Range Inquiry ("Is that normal?", "What does that reading mean?")
         if ftype == "NORMALITY_OR_RANGE":
-            # Identify target metric from query or conversation context
             target_metric = None
             for canonical, aliases in METRIC_ALIASES.items():
                 if any(re.search(r'\b' + re.escape(a) + r'\b', raw_query.lower()) or a in raw_query for a in aliases):
@@ -593,7 +996,6 @@ def process_patient_request(
             if not target_metric:
                 target_metric = conversation_context.get("last_metric")
 
-            # Identify target value from query or conversation context
             target_val = None
             bp_match = re.search(r'\b(\d{2,3}/\d{2,3})\b', raw_query)
             if bp_match:
@@ -699,9 +1101,7 @@ def process_patient_request(
                         fname = rep_obj.get("filename", fname)
 
             if dt:
-                summary_en = (
-                    f"The report ({fname}) containing your {target_metric} record was recorded on {dt}."
-                )
+                summary_en = f"The report ({fname}) containing your {target_metric} record was recorded on {dt}."
             else:
                 summary_en = (
                     f"Your report ({fname}) does not list an explicit collection timestamp in its record. "
@@ -747,7 +1147,7 @@ def process_patient_request(
             review_request = None
 
         # D. Other Tests in Report ("What other tests were in that report?")
-        else:
+        elif ftype == "OTHER_TESTS":
             target_rep_id = conversation_context.get("last_report_id") or report_id
             if not target_rep_id and user_id and conversation_context.get("last_filename"):
                 for r in tool_get_user_reports(user_id):
@@ -769,149 +1169,69 @@ def process_patient_request(
                         "no additional distinct laboratory test names were extracted."
                     )
             else:
-                summary_en = (
-                    "Please specify which report you would like to inspect to see its available tests."
-                )
+                summary_en = "Please specify which report you would like to inspect to see its available tests."
             guidance_en = [
                 "Prepare questions for a doctor and bring relevant documents to your next consultation.",
                 "Bring this document to your next doctor consultation."
             ]
             review_request = None
 
-    # =========================================================================
-    # INTENT: REPORT SPECIFIC METRIC
-    # =========================================================================
-    elif intent == "REPORT_SPECIFIC_METRIC":
-        if not user_id:
-            summary_en = "Authentication is required to access your personal medical reports. Please log in to view your test results."
-            guidance_en = ["Log in with your patient account credentials to inspect verified medical reports."]
-            review_request = None
+        # E. General Report Risk Question (e.g. "Is my report concerning?")
         else:
-            # Deterministic metric tool execution with active report continuity
-            effective_rep_id = report_id or conversation_context.get("last_report_id")
-            metric_res = tool_find_metric(user_id=user_id, report_id=effective_rep_id, query=raw_query)
-
-            # If not found in the prioritized report, try searching all reports of the patient
-            if not metric_res.get("found") and effective_rep_id:
-                all_res = tool_find_metric(user_id=user_id, report_id=None, query=raw_query)
-                if all_res.get("found"):
-                    metric_res = all_res
-
-            if metric_res.get("found"):
-                metric_name = metric_res.get("metric", "Test")
-                val = metric_res.get("value", "")
-                unit = metric_res.get("unit", "")
-                fname = metric_res.get("filename", "Report")
-                dt = metric_res.get("date", "")
-                date_snippet = f" (recorded on {dt})" if dt else ""
-                
-                summary_en = (
-                    f"In your report ({fname}{date_snippet}): "
-                    f"{metric_name} is recorded as {val} {unit}. "
-                    "This system presents recorded values without clinical interpretation. "
-                    "Please discuss what this value means for your individual health with your physician."
-                )
-                guidance_en = [
-                    f"Bring this {metric_name} record to your next clinical appointment.",
-                    "Prepare questions for your doctor regarding your target reference ranges."
-                ]
-                review_request = None
-            elif metric_res.get("error") == "no_reports":
-                summary_en = "You do not have any uploaded medical reports in your account yet. Please upload a report to inspect your results."
-                guidance_en = ["Navigate to 'Upload Report' to analyze a diagnostic report."]
-                review_request = None
-            elif metric_res.get("error") == "unauthorized_or_not_found":
-                summary_en = "Access denied. You do not have permission to view this medical report or it could not be found."
-                guidance_en = ["Ensure you are logged into the correct patient account."]
+            if not user_id:
+                summary_en = "Authentication is required to check risk indicators for your personal reports. Please log in."
+                guidance_en = ["Please log in to your patient account."]
                 review_request = None
             else:
-                # Metric was not found in the authorized reports
-                avail = metric_res.get("available_tests", [])
-                avail_str = f" Available tests found in your reports: {', '.join(avail)}." if avail else ""
-                searched_fname = metric_res.get("filename")
-                scope_str = f"in report ({searched_fname})" if searched_fname else "across your uploaded reports"
-                req_metric = metric_res.get("metric", "the requested test")
-                
-                summary_en = (
-                    f"We could not find a recorded measurement for '{req_metric}' {scope_str}.{avail_str} "
-                    "Please verify the spelling or check if this test was included in your uploaded document."
-                )
-                guidance_en = [
-                    "Check the test name in your physical laboratory document.",
-                    "Upload a clearer image or document if this test was present in your lab results."
-                ]
-                review_request = None
-
-    # =========================================================================
-    # INTENT: REPORT OVERVIEW OR RISK QUESTION (with report context)
-    # =========================================================================
-    elif intent in ("REPORT_OVERVIEW", "RISK_QUESTION"):
-        if not user_id:
-            summary_en = "Authentication is required to access your personal medical reports. Please log in to view your test results."
-            guidance_en = ["Please log in to your patient account to access your report summary."]
-            review_request = None
-        else:
-            user_reports = tool_get_user_reports(user_id=user_id)
-            if not user_reports:
-                summary_en = "You do not have any uploaded medical reports in your account yet. Please upload a report to inspect your results."
-                guidance_en = ["Upload your diagnostic document in 'Upload Report' to generate an educational summary."]
-                review_request = None
-            else:
-                # Identify appropriate report
-                target_report_id = report_id
-                if not target_report_id:
-                    # If user has multiple reports, try matching query terms to report filename or tests
-                    if len(user_reports) > 1:
-                        q_lower = raw_query.lower()
-                        matched = None
-                        for r in user_reports:
-                            fname_clean = r["filename"].lower()
-                            tests = [t.lower() for t in r.get("test_names", [])]
-                            if any(w in q_lower for w in fname_clean.replace(".", " ").replace("_", " ").split()):
-                                matched = r
-                                break
-                            if any(t in q_lower for t in tests):
-                                matched = r
-                                break
-                        
-                        if matched:
-                            target_report_id = matched["report_id"]
-                        else:
-                            # Ask patient which report they mean rather than silently picking newest
-                            titles = [f"'{r['filename']}' ({r['created_at'][:10]})" for r in user_reports]
-                            summary_en = (
-                                f"You have {len(user_reports)} reports available: {', '.join(titles)}. "
-                                "Which report would you like me to summarize or explain?"
-                            )
-                            guidance_en = ["Specify the report name or date you would like to discuss."]
-                            return {
-                                "translated_summary": translate_text(summary_en, effective_target_lang),
-                                "guidance": [translate_text(g, effective_target_lang) for g in guidance_en],
-                                "review_request": None,
-                                "disclaimer": CLINICAL_DISCLAIMERS["short_disclaimer"].get(effective_target_lang, CLINICAL_DISCLAIMERS["short_disclaimer"]["en"]),
-                                "detected_language": detected_lang,
-                                "response_language": effective_target_lang,
-                                "original_query": raw_query,
-                            }
-                    else:
-                        target_report_id = user_reports[0]["report_id"]
-
-                report_data = tool_get_report_summary(user_id=user_id, report_id=target_report_id)
-                if not report_data:
-                    summary_en = "Access denied or the specified report could not be found."
-                    guidance_en = ["Please verify your report selection."]
+                user_reports = tool_get_user_reports(user_id=user_id)
+                if not user_reports:
+                    summary_en = "You do not have any uploaded medical reports in your account yet."
+                    guidance_en = ["Upload your diagnostic document in 'Upload Report'."]
                     review_request = None
                 else:
-                    risk_assessment = report_data.get("risk_assessment", {})
-                    is_high_risk = risk_assessment.get("is_high_risk", False)
+                    target_report_id = report_id or conversation_context.get("last_report_id")
+                    if not target_report_id:
+                        if len(user_reports) == 1:
+                            target_report_id = user_reports[0]["report_id"]
+                        else:
+                            q_lower = raw_query.lower()
+                            matched = None
+                            for r in user_reports:
+                                if any(w in q_lower for w in r["filename"].lower().replace(".", " ").split() if len(w) > 2):
+                                    matched = r
+                                    break
+                            if matched:
+                                target_report_id = matched["report_id"]
+                            else:
+                                summary_en = f"You have {len(user_reports)} reports available. Which report would you like me to check for risk indicators?"
+                                guidance_en = ["Specify the report name or date you would like to evaluate."]
+                                return {
+                                    "intent": intent,
+                                    "translated_summary": translate_text(summary_en, effective_target_lang),
+                                    "guidance": [translate_text(g, effective_target_lang) for g in guidance_en],
+                                    "review_request": None,
+                                    "disclaimer": CLINICAL_DISCLAIMERS["short_disclaimer"].get(effective_target_lang, CLINICAL_DISCLAIMERS["short_disclaimer"]["en"]),
+                                    "detected_language": detected_lang,
+                                    "response_language": effective_target_lang,
+                                    "original_query": raw_query,
+                                    "report_list": None,
+                                    "metric_data": None,
+                                }
 
-                    if intent == "RISK_QUESTION":
+                    report_data = tool_get_report_summary(user_id=user_id, report_id=target_report_id)
+                    if not report_data:
+                        summary_en = "Access denied or the specified report could not be found."
+                        guidance_en = ["Please verify your report selection."]
+                        review_request = None
+                    else:
+                        risk_assessment = report_data.get("risk_assessment", {})
+                        is_high_risk = risk_assessment.get("is_high_risk", False)
                         if is_high_risk:
                             reasons = risk_assessment.get("reasons", ["Flagged clinical risk markers."])
                             summary_en = (
                                 f"Regarding your report ({report_data.get('filename')}): "
                                 f"The AI engine flagged elevated risk indicators ({', '.join(reasons)}) "
-                                "that require professional clinician review. "
+                                "that warrant professional clinician review. "
                                 + report_data.get("summary", "")
                             )
                             guidance_en = ["Please seek professional medical review based on the flagged information."]
@@ -930,14 +1250,10 @@ def process_patient_request(
                             )
                             guidance_en = ["Prepare questions for a doctor and bring relevant documents to your next consultation."]
                             review_request = None
-                    else:
-                        # General report overview
-                        summary_en = report_data.get("summary", "")
-                        guidance_en = report_data.get("guidance", ["Bring this document to your next doctor consultation."])
-                        review_request = None
+        include_disclaimer = True
 
     # =========================================================================
-    # INTENT: DOCUMENT NARRATIVE (explicit document text upload)
+    # INTENT: DOCUMENT_NARRATIVE (explicit document text upload)
     # =========================================================================
     elif intent == "DOCUMENT_NARRATIVE":
         cleaned_text = process_document(document_text)
@@ -958,31 +1274,33 @@ def process_patient_request(
             )
         else:
             guidance_en.append("Prepare questions for a doctor and bring relevant documents to your next consultation.")
+        include_disclaimer = True
 
     # =========================================================================
-    # INTENT: UNSUPPORTED OR UNCLEAR
+    # INTENT: UNCLEAR
     # =========================================================================
     else:
-        summary_en = (
-            "I am an educational medical assistant for MediGuide-AI. I can help explain your uploaded "
-            "laboratory reports, check specific test measurements (such as Hemoglobin or Blood Pressure), "
-            "or help you organize questions for your physician. How can I assist you with your reports?"
-        )
+        summary_en = CONVERSATIONAL_RESPONSES["unclear_prompt"]["en"]
         guidance_en = [
-            "Ask a question about your reports, such as 'What was my hemoglobin?' or 'Explain my test results'.",
+            "Ask a question about your reports, such as 'What was my hemoglobin?' or 'Explain my test results.'",
             "Upload diagnostic documents in 'Upload Report' if you have new lab results."
         ]
         review_request = None
+        include_disclaimer = True
 
-    # 3. Multilingual Translation Layer
+    # 4. Multilingual Translation Layer
     translated_summary = translate_text(summary_en, effective_target_lang)
-    translated_guidance = [translate_text(g, effective_target_lang) for g in guidance_en]
-    
-    std_disclaimer = CLINICAL_DISCLAIMERS["short_disclaimer"].get(
-        effective_target_lang, CLINICAL_DISCLAIMERS["short_disclaimer"]["en"]
-    )
+    translated_guidance = [translate_text(g, effective_target_lang) for g in guidance_en] if guidance_en else []
+
+    if include_disclaimer:
+        std_disclaimer = CLINICAL_DISCLAIMERS["short_disclaimer"].get(
+            effective_target_lang, CLINICAL_DISCLAIMERS["short_disclaimer"]["en"]
+        )
+    else:
+        std_disclaimer = ""
 
     return {
+        "intent": intent,
         "translated_summary": translated_summary,
         "guidance": translated_guidance,
         "review_request": review_request,
@@ -990,4 +1308,6 @@ def process_patient_request(
         "detected_language": detected_lang,
         "response_language": effective_target_lang,
         "original_query": raw_query,
+        "report_list": report_list,
+        "metric_data": metric_data,
     }

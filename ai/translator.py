@@ -269,6 +269,63 @@ ESCALATION_REASONS: Dict[str, Dict[str, str]] = {
     },
 }
 
+CONVERSATIONAL_RESPONSES: Dict[str, Dict[str, str]] = {
+    # 1. Greeting
+    "hello_greeting": {
+        "en": "Hello! I'm MediGuide-AI, your health information assistant. How can I help you today?",
+        "ta": "வணக்கம்! நான் மெடிகைட்-ஏஐ, உங்கள் சுகாதார தகவல் உதவியாளர். இன்று நான் உங்களுக்கு எவ்வாறு உதவ முடியும்?",
+        "hi": "नमस्ते! मैं मेडीगाइड-एआई हूँ, आपका स्वास्थ्य सूचना सहायक। आज मैं आपकी क्या मदद कर सकता हूँ?",
+        "te": "నమస్కారం! నేను మెడిగైడ్-AI, మీ ఆరోగ్య సమాచార సహాయకుడిని. ఈరోజు నేను మీకు ఎలా సహాయపడగలను?",
+        "ml": "നമസ്കാരം! ഞാൻ മെഡിഗൈഡ്-എഐ ആണ്, നിങ്ങളുടെ ആരോഗ്യ വിവര സഹായി. ഇന്ന് ഞാൻ നിങ്ങളെ എങ്ങനെ സഹായിക്കണം?",
+        "kn": "ನಮಸ್ಕಾರ! ನಾನು ಮೆಡಿಗೈಡ್-ಎಐ, ನಿಮ್ಮ ಆರೋಗ್ಯ ಮಾಹಿತಿ ಸಹಾಯಕ. ಇಂದು ನಾನು ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಲಿ?",
+    },
+    # 2. Identity
+    "identity": {
+        "en": "I'm MediGuide-AI, your health information assistant. I can help explain your uploaded reports and prepare questions for your doctor.",
+        "ta": "நான் மெடிகைட்-ஏஐ, உங்கள் சுகாதார தகவல் உதவியாளர். நீங்கள் பதிவேற்றிய மருத்துவ அறிக்கைகளை விளக்கமாகவும், உங்கள் மருத்துவரிடம் கேட்பதற்கான கேள்விகளைத் தயாரிக்கவும் என்னால் உதவ முடியும்.",
+        "hi": "मैं मेडीगाइड-एआई हूँ, आपका स्वास्थ्य सूचना सहायक। मैं आपकी अपलोड की गई रिपोर्टों को समझाने और आपके डॉक्टर के लिए प्रश्न तैयार करने में मदद कर सकता हूँ।",
+        "te": "నేను మెడిగైడ్-AI, మీ ఆరోగ్య సమాచార సహాయకుడిని. మీరు అప్‌లోడ్ చేసిన రిపోర్టులను అర్థం చేసుకోవడంలో మరియు మీ వైద్యుని కోసం ప్రశ్నలను సిద్ధం చేయడంలో నేను సహాయపడగలను.",
+        "ml": "ഞാൻ മെഡിഗൈഡ്-എഐ ആണ്, നിങ്ങളുടെ ആരോഗ്യ വിവര സഹായി. നിങ്ങൾ അപ്‌ലോഡ് ചെയ്ത റിപ്പോർട്ടുകൾ വിശദീകരിക്കാനും ഡോക്ടറോട് ചോദിക്കാനുള്ള ചോദ്യങ്ങൾ തയ്യാറാക്കാനും എനിക്ക് സഹായിക്കാനാകും.",
+        "kn": "ನಾನು ಮೆಡಿಗೈಡ್-ಎಐ, ನಿಮ್ಮ ಆರೋಗ್ಯ ಮಾಹಿತಿ ಸಹಾಯಕ. ನೀವು ಅಪ್‌ಲೋಡ್ ಮಾಡಿದ ವರದಿಗಳನ್ನು ವಿವರಿಸಲು ಮತ್ತು ನಿಮ್ಮ ವೈದ್ಯರಿಗಾಗಿ ಪ್ರಶ್ನೆಗಳನ್ನು ಸಿದ್ಧಪಡಿಸಲು ನಾನು ಸಹಾಯ ಮಾಡಬಲ್ಲೆ.",
+    },
+    # 3. User Introduction default
+    "user_intro_default": {
+        "en": "Nice to meet you! How can I help you today?",
+        "ta": "உங்களைச் சந்தித்ததில் மகிழ்ச்சி! இன்று நான் உங்களுக்கு எவ்வாறு உதவ முடியும்?",
+        "hi": "आपसे मिलकर अच्छा लगा! आज मैं आपकी क्या मदद कर सकता हूँ?",
+        "te": "మిమ్మల్ని కలవడం సంతోషంగా ఉంది! ఈరోజు నేను మీకు ఎలా సహాయపడగలను?",
+        "ml": "കണ്ടുമുട്ടിയതിൽ സന്തോഷം! ഇന്ന് ഞാൻ നിങ്ങളെ എങ്ങനെ സഹായിക്കണം?",
+        "kn": "ನಿಮ್ಮನ್ನು ಭೇಟಿಯಾಗಿದ್ದಕ್ಕೆ ಸಂತೋಷವಾಗಿದೆ! ಇಂದು ನಾನು ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಲಿ?",
+    },
+    # 4. Most dangerous disease education
+    "most_dangerous_disease": {
+        "en": "There is no single universally most dangerous disease. The risk and severity of a condition depend on factors such as how acute it is, the presence of complications, and whether prompt medical treatment is available. Serious health conditions include cardiovascular emergencies (such as heart attacks), acute strokes, severe infections, and advanced cancers. Are you asking for general health education about a specific condition, or would you like help understanding a measurement in your medical report?",
+        "ta": "உலகளவில் ஒரே ஒரு மிகவும் ஆபத்தான நோய் என்று எதுவும் இல்லை. ஒரு நோயின் ஆபத்து மற்றும் தீவிரம் அது எவ்வளவு தீவிரமானது, ஏற்படும் சிக்கல்கள் மற்றும் சரியான நேரத்தில் சிகிச்சை கிடைக்கிறதா என்பதைப் பொறுத்தது. மாரடைப்பு போன்ற இதய அவசரநிலைகள், பக்கவாதம், தீவிர நோய்த்தொற்றுகள் மற்றும் முற்றிய புற்றுநோய்கள் ஆகியவை தீவிர நிலைகளுக்கான உதாரணங்களாகும். நீங்கள் ஒரு குறிப்பிட்ட நோயைப் பற்றிய பொதுவான தகவலைத் தெரிந்துகொள்ள விரும்புகிறீர்களா, அல்லது உங்கள் மருத்துவ அறிக்கையில் உள்ள அளவீட்டைப் புரிந்துகொள்ள உதவி தேவையா?",
+        "hi": "सार्वभौमिक रूप से कोई एक सबसे खतरनाक बीमारी नहीं है। किसी बीमारी का जोखिम और गंभीरता इस बात पर निर्भर करती है कि वह कितनी तीव्र है, क्या जटिलताएं हैं, और क्या समय पर उपचार उपलब्ध है। उदाहरण के लिए हृदय संबंधी आपात स्थिति (जैसे दिल का दौरा), तीव्र स्ट्रोक, गंभीर संक्रमण और उन्नत कैंसर गंभीर बीमारियों में आते हैं। क्या आप किसी विशिष्ट बीमारी के बारे में सामान्य जानकारी चाहते हैं, या अपनी किसी मेडिकल रिपोर्ट को समझने में मदद चाहते हैं?",
+        "te": "సార్వత్రికంగా అత్యంత ప్రమాదకరమైన వ్యాధి ఒక్కటే అంటూ ఏదీ లేదు. ఒక వ్యాధి యొక్క తీవ్రత మరియు ప్రమాదం అది ఎంత వేగంగా వస్తుంది, సమస్యలు మరియు సకాలంలో చికిత్స అందుబాటులో ఉందా అనే దానిపై ఆధారపడి ఉంటుంది. గుండెపోటు, తీవ్రమైన పక్షవాతం, ప్రమాదకరమైన ఇన్ఫెక్షన్లు మరియు అధునాతన క్యాన్సర్లు తీవ్రమైన వ్యాధులకు ఉదాహరణలు. మీరు ఏదైనా నిర్దిష్ట పరిస్థితి గురించి సాధారణ సమాచారం తెలుసుకోవాలనుకుంటున్నారా, లేదా మీ మెడికల్ రిపోర్టులోని రీడింగ్‌ను అర్థం చేసుకోవడంలో సహాయం కావాలా?",
+        "ml": "സാർവത്രികമായി ഏറ്റവും അപകടകരമായ ഒരൊറ്റ രോഗം എന്ന് പറയാൻ കഴിയില്ല. ഒരു രോഗത്തിന്റെ അപകടസാധ്യതയും തീവ്രതയും അത് എത്രത്തോളം രൂക്ഷമാണ്, ഉണ്ടാകാൻ സാധ്യതയുള്ള സങ്കീർണതകൾ, കൃത്യസമയത്ത് ചികിത്സ ലഭ്യമാണോ എന്നീ ഘടകങ്ങളെ ആശ്രയിച്ചിരിക്കുന്നു. ഹൃദയാഘാതം, പക്ഷാഘാതം, ഗുരുതരമായ അണുബാധകൾ, കാൻസർ എന്നിവ ഗുരുതരമായ അവസ്ഥകൾക്ക് ഉദാഹരണങ്ങളാണ്. നിങ്ങൾക്ക് ഏതെങ്കിലും പ്രത്യേക അവസ്ഥയെക്കുറിച്ച് പൊതുവായ വിവരങ്ങൾ വേണമെന്നുണ്ടോ, അതോ നിങ്ങളുടെ മെഡിക്കൽ റിപ്പോർട്ടിലെ അളവ് മനസ്സിലാക്കാൻ സഹായം വേണമെന്നുണ്ടോ?",
+        "kn": "ಸಾರ್ವತ್ರಿಕವಾಗಿ ಅತ್ಯಂತ ಅಪಾಯಕಾರಿ ಕಾಯಿಲೆ ಒಂದೇ ಎಂದು ಹೇಳಲಾಗುವುದಿಲ್ಲ. ಕಾಯಿಲೆಯ ಅಪಾಯ ಮತ್ತು ತೀವ್ರತೆಯು ಅದು ಎಷ್ಟು ತೀವ್ರವಾಗಿದೆ, ಉಂಟಾಗುವ ತೊಡಕುಗಳು ಮತ್ತು ಸಮಯೋಚಿತ ಚಿಕಿತ್ಸೆ ಲಭ್ಯವಿದೆಯೇ ಎಂಬುದರ ಮೇಲೆ ಅವಲಂಬಿತವಾಗಿರುತ್ತದೆ. ಹೃದಯಾಘಾತ, ಪಾರ್ಶ್ವವಾಯು, ತೀವ್ರ ಸೋಂಕುಗಳು ಮತ್ತು ಮುಂದುವರಿದ ಕ್ಯಾನ್ಸರ್ ಗಂಭೀರ ಪರಿಸ್ಥಿತಿಗಳಿಗೆ ಉದಾಹರಣೆಗಳಾಗಿವೆ. ನೀವು ನಿರ್ದಿಷ್ಟ ಆರೋಗ್ಯ ಸ್ಥಿತಿಯ ಬಗ್ಗೆ ಸಾಮಾನ್ಯ ಮಾಹಿತಿ ಬಯಸುತ್ತೀರಾ ಅಥವಾ ನಿಮ್ಮ ವೈದ್ಯಕೀಯ ವರದಿಯ ಫಲಿತಾಂಶವನ್ನು ಅರ್ಥಮಾಡಿಕೊಳ್ಳಲು ಸಹಾಯ ಬೇಕೇ?",
+    },
+    # 5. Hypertension education
+    "hypertension_education": {
+        "en": "Hypertension (high blood pressure) is a common chronic condition where the force of the blood flowing through your blood vessels is persistently elevated. It is typically managed through lifestyle modifications, balanced nutrition, regular exercise, and medications prescribed by a physician. Would you like me to check your recorded blood pressure from your uploaded reports?",
+        "ta": "உயர் இரத்த அழுத்தம் (Hypertension) என்பது இரத்தக் குழாய்களில் பாயும் இரத்தத்தின் அழுத்தம் தொடர்ந்து அதிகமாக இருக்கும் ஒரு பொதுவான நிலையாகும். இது வாழ்க்கை முறை மாற்றங்கள், சீரான உணவு முறை மற்றும் மருத்துவர் பரிந்துரைக்கும் மருந்துகள் மூலம் நிர்வகிக்கப்படுகிறது. நீங்கள் பதிவேற்றிய அறிக்கைகளில் உள்ள இரத்த அழுத்த அளவை நான் சரிபார்க்க விரும்புகிறீர்களா?",
+        "hi": "उच्च रक्तचाप (हाइपरटेंशन) एक आम स्थिति है जिसमें रक्त वाहिकाओं में रक्त का दबाव लगातार अधिक रहता है। इसे जीवनशैली में बदलाव, संतुलित आहार और डॉक्टर द्वारा निर्धारित दवाओं के माध्यम से नियंत्रित किया जाता है। क्या आप चाहते हैं कि मैं आपकी रिपोर्ट से आपके रक्तचाप की जांच करूँ?",
+        "te": "రక్తపోటు (హైపర్‌టెన్షన్) అనేది రక్తనాళాలలో రక్త పీడనం నిరంతరం ఎక్కువగా ఉండే ఒక సాధారణ పరిస్థితి. దీనిని జీవనశైలి మార్పులు, సమతుల్య ఆహారం మరియు వైద్యులు సూచించిన మందుల ద్వారా నియంత్రించవచ్చు. మీ రిపోర్టుల నుండి మీ రక్తపోటును తనిఖీ చేయమంటారా?",
+        "ml": "രക്താതിമർദ്ദം (ഹൈപ്പർടെൻഷൻ) എന്നത് രക്തക്കുഴലുകളിലൂടെയുള്ള രക്തപ്രവാഹത്തിന്റെ മർദ്ദം തുടർച്ചയായി ഉയർന്നുനിൽക്കുന്ന ഒരു സാധാരണ അവസ്ഥയാണ്. ജീവിതശൈലി മാറ്റങ്ങൾ, സമീകൃതാഹാരം, ഡോക്ടർ നിർദ്ദേശിക്കുന്ന മരുന്നുകൾ എന്നിവയിലൂടെ ഇത് നിയന്ത്രിക്കാം. നിങ്ങളുടെ റിപ്പോർട്ടിൽ നിന്നുള്ള രക്തസമ്മർദ്ദം ഞാൻ പരിശോധിക്കണമെന്നുണ്ടോ?",
+        "kn": "ರಕ್ತದೊತ್ತಡ (ಹೈಪರ್‌ಟೆನ್ಷನ್) ಎನ್ನುವುದು ರಕ್ತನಾಳಗಳಲ್ಲಿ ರಕ್ತದ ಒತ್ತಡವು ನಿರಂತರವಾಗಿ ಹೆಚ್ಚಾಗಿರುವ ಒಂದು ಸಾಮಾನ್ಯ ಸ್ಥಿತಿಯಾಗಿದೆ. ಇದನ್ನು ಜೀವನಶೈಲಿಯ ಬದಲಾವಣೆಗಳು, ಸಮತೋಲಿತ ಆಹಾರ ಮತ್ತು ವೈದ್ಯರು ಸೂಚಿಸಿದ ಔಷಧಿಗಳ ಮೂಲಕ ನಿರ್ವಹಿಸಲಾಗುತ್ತದೆ. ನಿಮ್ಮ ವರದಿಗಳಿಂದ ನಿಮ್ಮ ರಕ್ತದೊತ್ತಡವನ್ನು ನಾನು ಪರಿಶೀಲಿಸಬೇಕೇ?",
+    },
+    # 6. Unclear fallback prompt
+    "unclear_prompt": {
+        "en": "I'm MediGuide-AI, your health information assistant. I can help explain your uploaded laboratory reports, check specific test measurements (such as Hemoglobin or Blood Pressure), or answer general health education questions. How can I assist you today?",
+        "ta": "நான் மெடிகைட்-ஏஐ, உங்கள் சுகாதார தகவல் உதவியாளர். நீங்கள் பதிவேற்றிய ஆய்வக அறிக்கைகளை விளக்கவும், குறிப்பிட்ட சோதனைகளின் அளவீடுகளைச் சரிபார்க்கவும் அல்லது பொதுவான சுகாதாரக் கேள்விகளுக்குப் பதிலளிக்கவும் என்னால் உதவ முடியும். இன்று நான் உங்களுக்கு எவ்வாறு உதவ முடியும்?",
+        "hi": "मैं मेडीगाइड-एआई हूँ, आपका स्वास्थ्य सूचना सहायक। मैं आपकी अपलोड की गई लैब रिपोर्ट को समझाने, विशिष्ट परीक्षण मापों (जैसे हीमोग्लोबिन या रक्तचाप) की जांच करने, या सामान्य स्वास्थ्य शिक्षा संबंधी सवालों के जवाब देने में मदद कर सकता हूँ। आज मैं आपकी क्या मदद कर सकता हूँ?",
+        "te": "నేను మెడిగైడ్-AI, మీ ఆరోగ్య సమాచార సహాయకుడిని. మీరు అప్‌లోడ్ చేసిన ల్యాబ్ రిపోర్టులను అర్థం చేసుకోవడంలో, నిర్దిష్ట పరీక్షల కొలతలను తనిఖీ చేయడంలో లేదా సాధారణ ఆరోగ్య విద్య ప్రశ్నలకు సమాధానం ఇవ్వడంలో నేను సహాయపడగలను. ఈరోజు నేను మీకు ఎలా సహాయపడగలను?",
+        "ml": "ഞാൻ മെഡിഗൈഡ്-എഐ ആണ്, നിങ്ങളുടെ ആരോഗ്യ വിവര സഹായി. നിങ്ങൾ അപ്‌ലോഡ് ചെയ്ത ലാബ് റിപ്പോർട്ടുകൾ വിശദീകരിക്കാനും നിർദ്ദിഷ്ട പരിശോധനാ അളവുകൾ പരിശോധിക്കാനും അല്ലെങ്കിൽ പൊതുവായ ആരോഗ്യ ചോദ്യങ്ങൾക്ക് ഉത്തരം നൽകാനും എനിക്ക് കഴിയും. ഇന്ന് ഞാൻ നിങ്ങളെ എങ്ങനെ സഹായിക്കണം?",
+        "kn": "ನಾನು ಮೆಡಿಗೈಡ್-ಎಐ, ನಿಮ್ಮ ಆರೋಗ್ಯ ಮಾಹಿತಿ ಸಹಾಯಕ. ನೀವು ಅಪ್‌ಲೋಡ್ ಮಾಡಿದ ಲ್ಯಾಬ್ ವರದಿಗಳನ್ನು ವಿವರಿಸಲು, ನಿರ್ದಿಷ್ಟ ಪರೀಕ್ಷಾ ಅಳತೆಗಳನ್ನು ಪರಿಶೀಲಿಸಲು ಅಥವಾ ಸಾಮಾನ್ಯ ಆರೋಗ್ಯ ಶಿಕ್ಷಣ ಪ್ರಶ್ನೆಗಳಿಗೆ ಉತ್ತರಿಸಲು ನಾನು ಸಹಾಯ ಮಾಡಬಲ್ಲೆ. ಇಂದು ನಾನು ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಲಿ?",
+    },
+}
+
 
 # ============================================================================
 # Core Translation Engine
@@ -373,21 +430,40 @@ def translate_text(text: str, target_language: str = "en", source_language: Opti
         if text.strip() == trans_dict["en"]:
             return trans_dict[target_lang]
 
-    # 5. Check escalation reasons
+    # 5. Check exact conversational responses
+    for _, trans_dict in CONVERSATIONAL_RESPONSES.items():
+        if text.strip() == trans_dict["en"]:
+            return trans_dict.get(target_lang, text)
+
+    # 6. Check user introduction with dynamic name
+    intro_match = re.match(r"^Nice to meet you, ([^!]+)! How can I help you today\?$", text.strip())
+    if intro_match:
+        name = intro_match.group(1).strip()
+        intro_templates = {
+            "en": f"Nice to meet you, {name}! How can I help you today?",
+            "ta": f"உங்களைச் சந்தித்ததில் மகிழ்ச்சி, {name}! இன்று நான் உங்களுக்கு எவ்வாறு உதவ முடியும்?",
+            "hi": f"आपसे मिलकर अच्छा लगा, {name}! आज मैं आपकी क्या मदद कर सकता हूँ?",
+            "te": f"మిమ్మల్ని కలవడం సంతోషంగా ఉంది, {name}! ఈరోజు నేను మీకు ఎలా సహాయపడగలను?",
+            "ml": f"കണ്ടുമുട്ടിയതിൽ സന്തോഷം, {name}! ഇന്ന് ഞാൻ നിങ്ങളെ എങ്ങനെ സഹായിക്കണം?",
+            "kn": f"ನಿಮ್ಮನ್ನು ಭೇಟಿಯಾಗಿದ್ದಕ್ಕೆ ಸಂತೋಷವಾಗಿದೆ, {name}! ಇಂದು ನಾನು ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಲಿ?",
+        }
+        return intro_templates.get(target_lang, intro_templates["en"])
+
+    # 7. Check escalation reasons
     for en_reason, trans_dict in ESCALATION_REASONS.items():
         if text.strip() == en_reason:
             return trans_dict[target_lang]
 
-    # 6. Check single medical terms
+    # 8. Check single medical terms
     text_lower = text.lower().strip()
     if text_lower in MEDICAL_TERMS and target_lang in MEDICAL_TERMS[text_lower]:
         return MEDICAL_TERMS[text_lower][target_lang]
 
-    # 7. Check structured / composite summary translations
-    if any(h in text for h in ["Reported symptoms:", "Tests mentioned:", "Recorded measurements:", "This is a summary"]):
+    # 9. Check structured / composite summary translations
+    if any(h in text for h in ["Reported symptoms:", "Tests mentioned:", "Recorded measurements:", "This is a summary", "In your report", "Regarding your"]):
         return _translate_structured_summary(text, target_lang)
 
-    # 8. Conversational / generic phrase translations
+    # 10. Conversational / generic phrase translations
     conversational_phrases = {
         "hello": {"ta": "வணக்கம்", "hi": "नमस्ते", "te": "నమస్కారం", "ml": "നമസ്കാരം", "kn": "ನಮಸ್ಕಾರ"},
         "thank you": {"ta": "நன்றி", "hi": "धन्यवाद", "te": "ధన్యవాదాలు", "ml": "നന്ദി", "kn": "ಧನ್ಯವಾದಗಳು"},
@@ -395,5 +471,5 @@ def translate_text(text: str, target_language: str = "en", source_language: Opti
     if text_lower in conversational_phrases and target_lang in conversational_phrases[text_lower]:
         return conversational_phrases[text_lower][target_lang]
 
-    # 9. Generic structured translation for other sentences
-    return _translate_structured_summary(text, target_lang)
+    # If text is arbitrary conversational sentence, do NOT mangle it with partial dictionary substitution
+    return text
