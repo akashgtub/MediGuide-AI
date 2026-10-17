@@ -38,6 +38,7 @@ from ai.agent_tools import (
 from backend.database import get_report_by_id
 from risk.risk_engine import evaluate_risk
 from human_review.review_manager import create_review_request
+from ai.medical_knowledge import fetch_live_medical_knowledge
 
 logger = logging.getLogger("mediguide_patient_agent")
 
@@ -301,10 +302,71 @@ def _detect_report_list_intent(text: str) -> bool:
     return any(p in text_lower for p in list_phrases)
 
 
-def _detect_general_medical_education(text: str) -> bool:
+def _detect_clarification_required(text: str) -> bool:
     """
-    Check if query is general health/medical education (e.g. disease information)
-    that must NOT trigger personal report retrieval.
+    Detect if input is a short, isolated interrogative or uninformative fragment
+    that requires clarification rather than generic welcome boilerplate.
+    e.g. 'what', 'what?', 'huh', '?', 'help?', 'why', 'who?', 'how?', 'please help'
+    """
+    text_clean = re.sub(r'[^a-zA-Z\u0900-\u0D7F\?]', ' ', text.strip().lower()).strip()
+    words = text_clean.split()
+
+    if not words:
+        return True
+
+    isolated = {"what", "huh", "why", "how", "who", "which", "where", "help", "?"}
+    if text_clean in isolated or (len(words) == 1 and (words[0] in isolated or words[0].rstrip("?") in isolated)):
+        return True
+
+    if text_clean in ("what is it", "what do you mean", "what is that", "what now", "tell me", "what else"):
+        return True
+
+    if len(words) <= 2 and words[0].rstrip("?") in isolated and words[-1] in ("?", "please", "now", "it"):
+        return True
+
+    return False
+
+
+def _detect_current_medical_information(text: str) -> bool:
+    """
+    Check if query asks for current medical guidelines, latest treatments,
+    or live medical guidance from trustworthy sources.
+    """
+    text_lower = text.lower().strip()
+
+    # Exclude personal report queries
+    personal_markers = ["my report", "my hemoglobin", "my blood pressure", "my result", "my test", "in my report", "my reading", "my value"]
+    if any(pm in text_lower for pm in personal_markers):
+        return False
+
+    current_markers = [
+        "latest treatment", "current treatment", "new treatment", "recent treatment",
+        "latest guideline", "current guideline", "latest guidelines", "current guidelines",
+        "latest research", "current research", "recent updates", "latest updates",
+        "latest protocol", "current protocol", "latest therapy", "current therapy",
+        "treatment for dengue", "cure for dengue", "latest on dengue", "latest dengue",
+        "treatment of dengue", "dengue treatment",
+        # Multilingual markers
+        "சமீபத்திய சிகிச்சை", "புதிய சிகிச்சை", "சமீபத்திய வழிகாட்டுதல்கள்", "டெங்கு சிகிச்சை", "டெங்கு புதிய சிகிச்சை", "டெங்கு நோய் சிகிச்சை",
+        "नवीनतम उपचार", "वर्तमान दिशानिर्देश", "नया इलाज", "डेंगू उपचार", "डेंगू का इलाज", "डेंगू के नए उपचार",
+        "తాజా చికిత్స", "నవీన చికిత్స", "డెంగ్యూ చికిత్స",
+        "ഏറ്റവും പുതിയ ചികിത്സ", "ഡെങ്കിപ്പനി ചികിത്സ",
+        "ಇತ್ತೀಚಿನ ಚಿಕಿತ್ಸೆ", "ಡೆಂಗ್ಯೂ ಚಿಕಿತ್ಸೆ",
+    ]
+    if any(cm in text_lower for cm in current_markers):
+        return True
+
+    # Regex patterns
+    if re.search(r'\b(?:latest|current|recent|newest)\s+(?:treatment|guidelines?|protocols?|management|advances?|therapy|recommendations?)\b', text_lower):
+        return True
+
+    return False
+
+
+def _detect_general_health_question(text: str) -> bool:
+    """
+    Check if query is general health/medical education (e.g. symptoms like fever/headache,
+    disease mechanisms, causes) that must NOT trigger personal report retrieval.
     """
     text_lower = text.lower().strip()
 
@@ -313,34 +375,75 @@ def _detect_general_medical_education(text: str) -> bool:
     if any(pm in text_lower for pm in personal_markers):
         return False
 
+    # Standalone symptom queries: "fever", "headache", "cough", "fatigue", "nausea"
+    symptom_standalone = [
+        "fever", "headache", "cough", "fatigue", "nausea", "dizziness",
+        "காய்ச்சல்", "தலைவலி", "இருமல்",
+        "बुखार", "सिरदर्द", "खांसी",
+        "జ్వరం", "తలనొప్పి",
+        "പനി", "തലവേദന",
+        "ಜ್ವರ", "ತಲೆನೋವು",
+    ]
+    text_clean = re.sub(r'[^\w\s\u0900-\u0D7F]', '', text_lower).strip()
+    if text_clean in symptom_standalone:
+        return True
+
+    words = text_clean.split()
+    if len(words) <= 3 and any(s in words for s in ["fever", "headache", "cough"]):
+        if not any(w in words for w in ["aspirin", "ibuprofen", "paracetamol", "taking", "mg", "tablet"]):
+            return True
+
     general_disease_queries = [
         "most dangerous disease", "deadliest disease", "worst disease", "deadly disease",
         "dangerous disease", "most dangerous",
+        "what causes fever", "causes of fever", "why do i have a fever", "cause of fever",
+        "what causes diabetes", "causes of diabetes", "why does diabetes happen", "cause of diabetes",
         "what is hypertension", "what is high blood pressure", "tell me about hypertension",
         "what causes high blood pressure", "what is diabetes", "what is anemia",
         "what causes low hemoglobin", "what is cancer", "what is cholesterol",
         "what causes high cholesterol", "what is asthma", "what is a normal heart rate",
         "what is a stroke", "what is a heart attack", "symptoms of diabetes",
         "symptoms of hypertension", "causes of anemia", "causes of hypertension",
+        "what causes headache", "causes of headache",
         "மிகவும் ஆபத்தான நோய் எது", "உயர் இரத்த அழுத்தம் என்றால் என்ன", "நீரிழிவு நோய் என்றால் என்ன",
+        "காய்ச்சல் வர காரணம்", "சர்க்கரை நோய் வர காரணம்",
         "सबसे खतरनाक बीमारी कौन सी है", "उच्च रक्तचाप क्या है", "मधुमेह क्या है",
+        "बुखार के कारण", "मधुमेह के कारण",
     ]
     if any(q in text_lower for q in general_disease_queries):
         return True
 
     # General question pattern: "what is <condition>", "what causes <condition>"
-    if re.search(r'\bwhat\s+(?:is|causes|are\s+the\s+symptoms\s+of)\s+[a-z\s]+\b', text_lower):
-        if not any(w in text_lower for w in ["my", "mine", "me", "i have"]):
+    if re.search(r'\b(?:what\s+(?:is|causes|are\s+the\s+symptoms\s+of)|causes?\s+of)\s+[a-z\s]+\b', text_lower):
+        if not any(w in text_lower for w in ["my", "mine", "me", "i have", "in my report"]):
+            return True
+
+    return False
+
+
+def _detect_general_medical_education(text: str) -> bool:
+    """Backward compatibility alias for _detect_general_health_question."""
+    return _detect_general_health_question(text)
+
+
+def _detect_followup_question(
+    text: str,
+    conversation_context: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Check if message is a contextual follow-up question regarding a previously discussed metric or report."""
+    if _detect_followup_type(text) is not None:
+        return True
+
+    if conversation_context and (conversation_context.get("last_metric") or conversation_context.get("last_report_id")):
+        text_clean = text.lower().strip()
+        if any(p in text_clean for p in ["is that", "is it", "what about", "and that", "normal", "concerning", "when was", "which doctor"]):
             return True
 
     return False
 
 
 def _detect_risk_question_intent(text: str) -> bool:
-    """
-    Check if message is asking whether a specific result/value/report is normal,
-    concerning, or requires clinical follow-up.
-    """
+    """Backward compatibility wrapper checking if query is a risk question or follow-up."""
     text_lower = text.lower().strip()
     if _detect_followup_type(text) is not None:
         return True
@@ -608,63 +711,73 @@ def classify_patient_intent(
 ) -> str:
     """
     Deterministic intent router for patient assistant messages.
-    Returns one of the 11 supported intents:
+    Returns one of the 12 supported intents:
     1. EMERGENCY: potentially urgent symptoms.
-    2. IDENTITY: what is your name, who are you, what can you do?
+    2. CLARIFICATION_REQUIRED: isolated short interrogatives like 'what', 'huh', '?'.
     3. USER_INTRODUCTION: my name is Akash, I am Akash.
-    4. GENERAL_MEDICAL_EDUCATION: what is the most dangerous disease, what is hypertension?
-    5. REPORT_LIST: show my reports, list my uploaded reports.
-    6. REPORT_METRIC_QUERY: what was my hemoglobin, what is my blood pressure?
-    7. REPORT_OVERVIEW: summarize my CBC report, explain my report.
-    8. RISK_QUESTION: is this result concerning, is that value normal?
-    9. DOCUMENT_NARRATIVE: explicit clinical record text / multiline document text.
-    10. GREETING: hi, hello, hey, good morning.
-    11. UNCLEAR: questions that cannot be safely classified.
+    4. IDENTITY: what is your name, who are you, what can you do?
+    5. GREETING: hi, hello, hey, good morning.
+    6. CURRENT_MEDICAL_INFORMATION: what is the latest treatment for dengue?
+    7. REPORT_LIST: show my reports, list my uploaded reports.
+    8. REPORT_METRIC_QUERY: what was my hemoglobin, what is my blood pressure?
+    9. REPORT_OVERVIEW: summarize my CBC report, explain my report.
+    10. FOLLOW_UP: is that normal, when was that, which doctor should I see?
+    11. GENERAL_HEALTH_QUESTION: fever, headache, what causes diabetes, what causes fever?
+    12. DOCUMENT_NARRATIVE: explicit clinical record text / multiline document text.
     """
     if not text or not text.strip():
-        return "UNCLEAR"
+        return "CLARIFICATION_REQUIRED"
 
-    # Priority 1: Clinical Emergency
+    # Priority 1: Clinical Emergency (highest priority safety guardrail)
     if _detect_emergency_intent(text):
         return "EMERGENCY"
 
-    # Priority 2: User Introduction ("I am Akash", "My name is Akash")
+    # Priority 2: Clarification Required for short, isolated interrogatives ("what", "huh", "?")
+    if _detect_clarification_required(text):
+        return "CLARIFICATION_REQUIRED"
+
+    # Priority 3: User Introduction ("I am Akash", "My name is Akash")
     if _detect_user_introduction(text) is not None:
         return "USER_INTRODUCTION"
 
-    # Priority 3: Identity / Capabilities / Prescribing refusal
+    # Priority 4: Identity / Capabilities / Prescribing refusal
     if _detect_identity_intent(text) or any(p in text.lower() for p in PRESCRIBE_DIAGNOSE_PATTERNS):
         return "IDENTITY"
 
-    # Priority 4: Explicit Report Listing ("show my reports", "list my uploaded reports")
-    if _detect_report_list_intent(text):
-        return "REPORT_LIST"
-
-    # Priority 5: General Medical Education ("what is the most dangerous disease", "what is hypertension")
-    if _detect_general_medical_education(text):
-        return "GENERAL_MEDICAL_EDUCATION"
-
-    # Priority 6: Risk Question or Contextual Follow-up ("is this normal", "is that concerning", "is that reading normal", "when was that")
-    if _detect_risk_question_intent(text):
-        return "RISK_QUESTION"
-
-    # Priority 7: Report Overview / Summary ("summarize my CBC report", "explain my report", "what were my test results")
-    if _detect_report_overview_intent(text):
-        return "REPORT_OVERVIEW"
-
-    # Priority 8: Report Metric Query ("what was my hemoglobin", "what is my blood pressure")
-    if _detect_metric_inquiry(text):
-        return "REPORT_METRIC_QUERY"
-
-    # Priority 9: Explicit Document Narrative Text (OCR record, lab results text)
-    if _detect_document_narrative(text):
-        return "DOCUMENT_NARRATIVE"
-
-    # Priority 10: Greeting ("hi", "hello", "good morning")
+    # Priority 5: Greeting ("hi", "hello", "good morning")
     if _detect_greeting_intent(text):
         return "GREETING"
 
-    return "UNCLEAR"
+    # Priority 6: Current Medical Information Retrieval ("what is the latest treatment for dengue?")
+    if _detect_current_medical_information(text):
+        return "CURRENT_MEDICAL_INFORMATION"
+
+    # Priority 7: Explicit Report Listing ("show my reports", "list my uploaded reports")
+    if _detect_report_list_intent(text):
+        return "REPORT_LIST"
+
+    # Priority 8: Report Metric Query ("what was my hemoglobin", "what is my blood pressure", "what about platelets?")
+    if _detect_metric_inquiry(text) and _detect_followup_type(text) is None:
+        return "REPORT_METRIC_QUERY"
+
+    # Priority 9: Contextual Follow-up ("is that normal", "when was that", "which doctor should I see", "what other tests")
+    if _detect_followup_question(text, conversation_context):
+        return "FOLLOW_UP"
+
+    # Priority 10: Report Overview / Summary ("summarize my CBC report", "explain my report")
+    if _detect_report_overview_intent(text):
+        return "REPORT_OVERVIEW"
+
+    # Priority 11: General Health Question ("fever", "headache", "what causes fever", "what causes diabetes", "what is hypertension")
+    if _detect_general_health_question(text):
+        return "GENERAL_HEALTH_QUESTION"
+
+    # Priority 12: Explicit Document Narrative Text (OCR record, multiline lab results)
+    if _detect_document_narrative(text):
+        return "DOCUMENT_NARRATIVE"
+
+    # Safe fallback: Request clarification rather than dumping generic welcome
+    return "CLARIFICATION_REQUIRED"
 
 
 def process_patient_request(
@@ -705,6 +818,9 @@ def process_patient_request(
     guidance_en = []
     report_list = None
     metric_data = None
+    sources = []
+    retrieval_timestamp = None
+    is_live = False
     include_disclaimer = True
 
     # =========================================================================
@@ -740,6 +856,15 @@ def process_patient_request(
             report_id=report_id or conversation_context.get("last_report_id"),
         )
         include_disclaimer = True
+
+    # =========================================================================
+    # INTENT: CLARIFICATION_REQUIRED
+    # =========================================================================
+    elif intent == "CLARIFICATION_REQUIRED":
+        summary_en = CONVERSATIONAL_RESPONSES["clarification_prompt"]["en"]
+        guidance_en = []
+        include_disclaimer = False
+        review_request = None
 
     # =========================================================================
     # INTENT: USER_INTRODUCTION
@@ -782,27 +907,62 @@ def process_patient_request(
         review_request = None
 
     # =========================================================================
-    # INTENT: GENERAL_MEDICAL_EDUCATION
+    # INTENT: CURRENT_MEDICAL_INFORMATION
     # =========================================================================
-    elif intent == "GENERAL_MEDICAL_EDUCATION":
+    elif intent == "CURRENT_MEDICAL_INFORMATION":
+        k_res = fetch_live_medical_knowledge(raw_query)
+        summary_en = k_res.get("summary", "")
+        guidance_en = k_res.get("guidance", [])
+        sources = k_res.get("sources", [])
+        retrieval_timestamp = k_res.get("retrieval_timestamp")
+        is_live = k_res.get("is_live", False)
+        include_disclaimer = True
+        review_request = None
+
+    # =========================================================================
+    # INTENT: GENERAL_HEALTH_QUESTION (and GENERAL_MEDICAL_EDUCATION)
+    # =========================================================================
+    elif intent in ("GENERAL_HEALTH_QUESTION", "GENERAL_MEDICAL_EDUCATION"):
         q_lower = raw_query.lower()
-        if any(w in q_lower for w in [
+        if any(w in q_lower for w in ["fever", "காய்ச்சல்", "बुखार", "జ్వరం", "പനി", "ಜ್ವರ"]):
+            if any(w in q_lower for w in ["cause", "why", "காரணம்", "कारण", "ఎందుకు", "കാരണം"]):
+                summary_en = CONVERSATIONAL_RESPONSES["fever_causes_education"]["en"]
+                guidance_en = ["Prepare questions for your healthcare provider if you have an active or unexplained fever."]
+            else:
+                summary_en = CONVERSATIONAL_RESPONSES["fever_symptom_inquiry"]["en"]
+                guidance_en = [
+                    "Monitor your body temperature with a thermometer.",
+                    "Stay hydrated with clean fluids and get sufficient rest.",
+                    "Seek prompt medical care if the fever exceeds 103°F (39.4°C) or lasts over 3 days."
+                ]
+        elif any(w in q_lower for w in ["headache", "தலைவலி", "सिरदर्द", "తలనొప్పి", "തലവേദന", "ತಲೆನೋವು"]):
+            summary_en = CONVERSATIONAL_RESPONSES["headache_symptom_inquiry"]["en"]
+            guidance_en = [
+                "Rest in a quiet, dark room and stay hydrated.",
+                "Seek emergency medical care if you experience a sudden, severe thunderclap headache."
+            ]
+        elif any(w in q_lower for w in ["diabetes", "சர்க்கரை", "मधुमेह"]):
+            summary_en = CONVERSATIONAL_RESPONSES["diabetes_causes_education"]["en"]
+            guidance_en = ["Discuss your risk factors and blood sugar screening with a physician."]
+        elif any(w in q_lower for w in [
             "most dangerous", "deadliest", "worst disease", "deadly disease", "dangerous disease",
-            "மிகவும் ஆபத்தான", "सबसे खतरनाक", "అత్యంత ప్రమాదకరమైన", "ഏറ്റവും അപകടകരമായ", "ಅತ್ಯಂತ ಅಪಾಯಕಾರಿ"
+            "மிகவும் ஆபத்தான", "सबसे खतरनाक", "అత్యంత ప్రమాదಕರమైన", "ഏറ്റവും അപകടകരമായ", "ಅತ್ಯಂತ ಅಪಾಯಕಾರಿ"
         ]):
             summary_en = CONVERSATIONAL_RESPONSES["most_dangerous_disease"]["en"]
+            guidance_en = ["Prepare questions for your doctor regarding any health symptoms or conditions you wish to discuss."]
         elif any(w in q_lower for w in [
             "hypertension", "high blood pressure",
             "உயர் இரத்த அழுத்தம்", "उच्च रक्तचाप", "రక్తపోటు", "രക്താതിമർദ്ദം", "ರಕ್ತದೊತ್ತಡ"
         ]):
             summary_en = CONVERSATIONAL_RESPONSES["hypertension_education"]["en"]
+            guidance_en = ["Prepare questions for your doctor regarding your target blood pressure ranges."]
         else:
             summary_en = (
                 "General medical information is provided for educational purposes. Severity and outcomes depend on "
                 "individual clinical history, complications, and timely professional medical care. "
                 "Would you like general health education about a specific condition, or help understanding a particular medical report?"
             )
-        guidance_en = ["Prepare questions for your doctor regarding any health symptoms or conditions you wish to discuss."]
+            guidance_en = ["Prepare questions for your doctor regarding any health symptoms or conditions you wish to discuss."]
         include_disclaimer = True
         review_request = None
 
@@ -988,9 +1148,9 @@ def process_patient_request(
         include_disclaimer = True
 
     # =========================================================================
-    # INTENT: RISK_QUESTION
+    # INTENT: FOLLOW_UP (and RISK_QUESTION)
     # =========================================================================
-    elif intent == "RISK_QUESTION":
+    elif intent in ("FOLLOW_UP", "RISK_QUESTION"):
         ftype = _detect_followup_type(raw_query)
 
         # A. Normality or Range Inquiry ("Is that normal?", "What does that reading mean?")
@@ -1284,20 +1444,21 @@ def process_patient_request(
         include_disclaimer = True
 
     # =========================================================================
-    # INTENT: UNCLEAR
+    # INTENT: UNCLEAR / FALLBACK
     # =========================================================================
     else:
-        summary_en = CONVERSATIONAL_RESPONSES["unclear_prompt"]["en"]
-        guidance_en = [
-            "Ask a question about your reports, such as 'What was my hemoglobin?' or 'Explain my test results.'",
-            "Upload diagnostic documents in 'Upload Report' if you have new lab results."
-        ]
+        summary_en = CONVERSATIONAL_RESPONSES["clarification_prompt"]["en"]
+        guidance_en = []
         review_request = None
-        include_disclaimer = True
+        include_disclaimer = False
 
     # 4. Multilingual Translation Layer
     translated_summary = translate_text(summary_en, effective_target_lang)
     translated_guidance = [translate_text(g, effective_target_lang) for g in guidance_en] if guidance_en else []
+
+    if effective_target_lang != "en" and sources:
+        for s in sources:
+            s["language_note"] = "Official medical source published in English"
 
     if include_disclaimer:
         std_disclaimer = CLINICAL_DISCLAIMERS["short_disclaimer"].get(
@@ -1317,4 +1478,7 @@ def process_patient_request(
         "original_query": raw_query,
         "report_list": report_list,
         "metric_data": metric_data,
+        "sources": sources,
+        "retrieval_timestamp": retrieval_timestamp,
+        "is_live": is_live,
     }

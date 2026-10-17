@@ -23,6 +23,7 @@ from backend.app import app
 from backend.auth import create_access_token
 from backend.database import get_review_by_id, get_report_by_id
 from ai.patient_agent import process_patient_request, classify_patient_intent
+from ai.medical_knowledge import set_mock_retrieval_handler, clear_mock_retrieval_handler, fetch_live_medical_knowledge
 
 client = TestClient(app)
 
@@ -490,7 +491,7 @@ def test_general_disease_questions_do_not_trigger_report_list():
     """Verify questions like 'what is the most dangerous disease' return education without listing 58 reports."""
     # User 1 has dozens of reports in the database
     res = process_patient_request("what is the most dangerous disease", user_id="1")
-    assert res["intent"] == "GENERAL_MEDICAL_EDUCATION"
+    assert res["intent"] in ("GENERAL_HEALTH_QUESTION", "GENERAL_MEDICAL_EDUCATION")
     assert res["review_request"] is None
     assert res["report_list"] is None
     summary_lower = res["translated_summary"].lower()
@@ -507,7 +508,7 @@ def test_general_disease_questions_do_not_trigger_report_list():
 
     # General question: "what is hypertension"
     res_htn = process_patient_request("what is hypertension", user_id="1")
-    assert res_htn["intent"] == "GENERAL_MEDICAL_EDUCATION"
+    assert res_htn["intent"] in ("GENERAL_HEALTH_QUESTION", "GENERAL_MEDICAL_EDUCATION")
     assert res_htn["report_list"] is None
     assert "hypertension" in res_htn["translated_summary"].lower()
     assert "blood pressure" in res_htn["translated_summary"].lower()
@@ -611,5 +612,303 @@ def test_report_summary_optional_fields_fallback():
     # Summary should not be raw JSON
     assert "{" not in summary_text[:50]
     assert "}" not in summary_text[-50:]
+
+
+# ============================================================================
+# 27. Short Vague Inputs Request Clarification Without Generic Welcome
+# ============================================================================
+
+def test_short_vague_input_requests_clarification():
+    """Verify single-word/vague inputs like 'what' or '?' request clarification instead of generic welcome."""
+    # "what"
+    res_what = process_patient_request("what", user_id="1")
+    assert res_what["intent"] == "CLARIFICATION_REQUIRED"
+    assert res_what["review_request"] is None
+    assert "Hello! I'm MediGuide-AI" not in res_what["translated_summary"]
+    assert "detail" in res_what["translated_summary"].lower() or "clarif" in res_what["translated_summary"].lower()
+
+    # "?"
+    res_q = process_patient_request("?", user_id="1")
+    assert res_q["intent"] == "CLARIFICATION_REQUIRED"
+    assert "detail" in res_q["translated_summary"].lower() or "clarif" in res_q["translated_summary"].lower()
+
+
+# ============================================================================
+# 28. Single-Word Symptom Inquiries ("fever", "headache") Provide Guidance
+# ============================================================================
+
+def test_single_word_symptom_inquiry():
+    """Verify single-word symptoms provide health education and follow-up questions without diagnosing."""
+    # "fever"
+    res_fever = process_patient_request("fever", user_id="1")
+    assert res_fever["intent"] == "GENERAL_HEALTH_QUESTION"
+    assert res_fever["review_request"] is None
+    assert "Hello! I'm MediGuide-AI" not in res_fever["translated_summary"]
+    summary_lower = res_fever["translated_summary"].lower()
+    assert "fever" in summary_lower
+    assert "how long" in summary_lower or "duration" in summary_lower
+    assert "other symptoms" in summary_lower or "accompanying" in summary_lower or "stiff neck" in summary_lower
+    assert "does not diagnose" in res_fever["disclaimer"].lower() or "not a diagnosis" in res_fever["disclaimer"].lower()
+
+    # "headache"
+    res_headache = process_patient_request("headache", user_id="1")
+    assert res_headache["intent"] == "GENERAL_HEALTH_QUESTION"
+    summary_h = res_headache["translated_summary"].lower()
+    assert "headache" in summary_h
+    assert "how long" in summary_h or "duration" in summary_h or "pattern" in summary_h
+    assert "sudden severe" in summary_h or "thunderclap" in summary_h or "warning" in summary_h
+
+
+# ============================================================================
+# 29. General Health Questions: Direct Educational Answers
+# ============================================================================
+
+def test_general_health_question_causes():
+    """Verify questions asking causes of fever and diabetes receive direct educational explanations."""
+    # "what causes fever?"
+    res_fever_causes = process_patient_request("what causes fever?", user_id="1")
+    assert res_fever_causes["intent"] == "GENERAL_HEALTH_QUESTION"
+    assert res_fever_causes["review_request"] is None
+    summary_fc = res_fever_causes["translated_summary"].lower()
+    assert "fever" in summary_fc
+    assert "immune response" in summary_fc or "infection" in summary_fc
+    assert "bacterial" in summary_fc or "viral" in summary_fc
+
+    # "what causes diabetes?"
+    res_diabetes = process_patient_request("what causes diabetes?", user_id="1")
+    assert res_diabetes["intent"] == "GENERAL_HEALTH_QUESTION"
+    summary_d = res_diabetes["translated_summary"].lower()
+    assert "diabetes" in summary_d
+    assert "type 1" in summary_d and "type 2" in summary_d
+    assert "insulin" in summary_d
+
+
+# ============================================================================
+# 30. Current Medical Information Retrieval (Offline Mock Test)
+# ============================================================================
+
+def test_current_medical_information_retrieval_dengue():
+    """Verify questions regarding current/latest treatment trigger live retrieval and cite trusted sources."""
+    mock_sources = [
+        {
+            "title": "Dengue Clinical Management and Supportive Care",
+            "url": "https://medlineplus.gov/dengue.html",
+            "source_name": "MedlinePlus / National Library of Medicine",
+            "date_modified": "2026-03-15",
+            "snippet": "Dengue treatment relies on supportive care, adequate hydration, and paracetamol for fever control.",
+        },
+        {
+            "title": "Dengue Guidelines for Diagnosis, Treatment, Prevention and Control",
+            "url": "https://www.who.int/news-room/fact-sheets/detail/dengue-and-severe-dengue",
+            "source_name": "World Health Organization (WHO)",
+            "published_date": "2026-04-20",
+            "snippet": "Avoid aspirin and other non-steroidal anti-inflammatory drugs (NSAIDs) like ibuprofen as they may increase the risk of bleeding.",
+        }
+    ]
+
+    def mock_fetch(query: str):
+        return {
+            "summary": "According to MedlinePlus and the World Health Organization (WHO), there is no specific antiviral medication for dengue. Management focuses on supportive care, bed rest, and maintaining hydration. Paracetamol is recommended for fever and pain relief. Avoid aspirin, ibuprofen, and other NSAIDs as they increase bleeding risks.",
+            "sources": mock_sources,
+            "retrieval_timestamp": "2026-10-16T14:30:00Z",
+            "is_live": True,
+        }
+
+    set_mock_retrieval_handler(mock_fetch)
+    try:
+        res = process_patient_request("what is the latest treatment for dengue?", user_id="1")
+        assert res["intent"] == "CURRENT_MEDICAL_INFORMATION"
+        assert res["review_request"] is None
+        assert res["is_live"] is True
+        assert len(res["sources"]) == 2
+        assert res["sources"][0]["url"] == "https://medlineplus.gov/dengue.html"
+        assert res["sources"][1]["source_name"] == "World Health Organization (WHO)"
+        assert res["retrieval_timestamp"] == "2026-10-16T14:30:00Z"
+        summary_lower = res["translated_summary"].lower()
+        assert "paracetamol" in summary_lower
+        assert "ibuprofen" in summary_lower or "nsaid" in summary_lower or "bleeding" in summary_lower
+    finally:
+        clear_mock_retrieval_handler()
+
+
+# ============================================================================
+# 31. Network Timeout and Retrieval Failure Fallback (Zero Fabricated Sources)
+# ============================================================================
+
+def test_current_medical_retrieval_failure_fallback():
+    """Verify network failures or timeouts return graceful educational fallback with zero fabricated citations."""
+    def mock_failing_fetch(query: str):
+        return {
+            "summary": "Current authoritative medical sources could not be verified in real time due to a network timeout or offline service. For dengue, clinical guidance generally emphasizes fluid hydration and paracetamol, while strictly avoiding aspirin or ibuprofen due to bleeding complications.",
+            "sources": [],
+            "retrieval_timestamp": "2026-10-16T14:35:00Z",
+            "is_live": False,
+        }
+
+    set_mock_retrieval_handler(mock_failing_fetch)
+    try:
+        res = process_patient_request("what is the latest treatment for dengue?", user_id="1")
+        assert res["intent"] == "CURRENT_MEDICAL_INFORMATION"
+        assert res["is_live"] is False
+        assert len(res["sources"]) == 0  # Zero fabricated sources!
+        summary_lower = res["translated_summary"].lower()
+        assert "could not be verified" in summary_lower or "offline" in summary_lower
+    finally:
+        clear_mock_retrieval_handler()
+
+
+# ============================================================================
+# 32. Personal Report Queries Remain Isolated from Web Search
+# ============================================================================
+
+def test_personal_report_queries_remain_isolated_from_web_search():
+    """Verify personal metric queries query only user's report without invoking external web retrieval."""
+    called_web_search = []
+    def mock_spy_fetch(query: str):
+        called_web_search.append(query)
+        return {"summary": "spy", "sources": [], "retrieval_timestamp": "", "is_live": False}
+
+    set_mock_retrieval_handler(mock_spy_fetch)
+    try:
+        res = process_patient_request("what was my hemoglobin?", user_id="1")
+        assert res["intent"] == "REPORT_METRIC_QUERY"
+        assert len(called_web_search) == 0  # External search was NOT invoked!
+        assert "hemoglobin" in res["translated_summary"].lower()
+        assert ("14.2" in res["translated_summary"]) or ("12.5" in res["translated_summary"])
+    finally:
+        clear_mock_retrieval_handler()
+
+
+# ============================================================================
+# 33. Emergency Symptoms Bypass External Web Search Immediately
+# ============================================================================
+
+def test_emergency_symptoms_bypasses_web_search():
+    """Verify severe emergency symptoms create high-risk escalation immediately without web search latency."""
+    called_web_search = []
+    def mock_spy_fetch(query: str):
+        called_web_search.append(query)
+        return {"summary": "spy", "sources": [], "retrieval_timestamp": "", "is_live": False}
+
+    set_mock_retrieval_handler(mock_spy_fetch)
+    try:
+        res = process_patient_request("I have severe chest pain and difficulty breathing", user_id="1")
+        assert res["intent"] == "EMERGENCY"
+        assert len(called_web_search) == 0  # Zero external search delay!
+        assert res["review_request"] is not None
+        assert res["review_request"]["risk_level"] == "HIGH"
+        assert "emergency" in res["translated_summary"].lower()
+    finally:
+        clear_mock_retrieval_handler()
+
+
+# ============================================================================
+# 34. Multilingual Live Medical Knowledge with Honest Language Attribution
+# ============================================================================
+
+def test_multilingual_live_medical_knowledge():
+    """Verify Tamil and Hindi requests for current knowledge provide translated summary and language attribution."""
+    mock_sources = [
+        {
+            "title": "Dengue Clinical Management",
+            "url": "https://medlineplus.gov/dengue.html",
+            "source_name": "MedlinePlus",
+            "date_modified": "2026-03-15",
+            "snippet": "Dengue treatment relies on supportive care.",
+        }
+    ]
+    def mock_fetch(query: str):
+        return {
+            "summary": "Management focuses on supportive care and paracetamol. Avoid aspirin and ibuprofen.",
+            "sources": mock_sources,
+            "retrieval_timestamp": "2026-10-16T14:40:00Z",
+            "is_live": True,
+        }
+
+    set_mock_retrieval_handler(mock_fetch)
+    try:
+        res_ta = process_patient_request("டெங்கு சிகிச்சை", user_id="1", target_language="ta")
+        assert res_ta["intent"] == "CURRENT_MEDICAL_INFORMATION"
+        assert res_ta["response_language"] == "ta"
+        assert len(res_ta["sources"]) == 1
+        # Honest attribution: patient is informed the original medical publication is in English
+        assert res_ta["sources"][0].get("language_note") == "Official medical source published in English"
+    finally:
+        clear_mock_retrieval_handler()
+
+
+# ============================================================================
+# 35. /api/process-text Returns Sources, Retrieval Timestamp, and Live Status
+# ============================================================================
+
+def test_api_process_text_returns_sources_and_timestamps():
+    """Verify /api/process-text endpoint exposes sources, retrieval_timestamp, and is_live to frontend."""
+    token = create_access_token(user_id="1", email="alex@example.com", role="patient", name="Alex Morgan")
+
+    mock_sources = [
+        {
+            "title": "NIH Dengue Information",
+            "url": "https://medlineplus.gov/dengue.html",
+            "source_name": "NIH / MedlinePlus",
+            "date_modified": "2026-01-10",
+            "snippet": "Supportive fluid replacement is essential.",
+        }
+    ]
+    def mock_fetch(query: str):
+        return {
+            "summary": "Supportive fluid management is recommended. Paracetamol is advised for fever.",
+            "sources": mock_sources,
+            "retrieval_timestamp": "2026-10-16T14:45:00Z",
+            "is_live": True,
+        }
+
+    set_mock_retrieval_handler(mock_fetch)
+    try:
+        response = client.post(
+            "/api/process-text",
+            json={"text": "what is the latest treatment for dengue?", "target_language": "en"},
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["intent"] == "CURRENT_MEDICAL_INFORMATION"
+        assert data["is_live"] is True
+        assert data["retrieval_timestamp"] == "2026-10-16T14:45:00Z"
+        assert len(data["sources"]) == 1
+        assert data["sources"][0]["url"] == "https://medlineplus.gov/dengue.html"
+    finally:
+        clear_mock_retrieval_handler()
+
+
+# ============================================================================
+# 36. Live Knowledge Module Unit Tests: XML Parsing, Limits, and Offline Guard
+# ============================================================================
+
+def test_live_knowledge_module_unit_behavior():
+    """Verify ai/medical_knowledge.py error handling and strict citation integrity."""
+    from ai.medical_knowledge import (
+        _parse_medlineplus_xml,
+        _extract_dengue_guidance,
+        _fallback_offline_knowledge,
+        fetch_live_medical_knowledge
+    )
+
+    # 1. Malformed XML handling safely returns empty list
+    bad_xml = b"<invalid>xml<data>"
+    sources, passages = _parse_medlineplus_xml(bad_xml)
+    assert sources == []
+    assert passages == []
+
+    # 2. Grounded response with dengue enforces paracetamol and warning against NSAIDs
+    guidance = _extract_dengue_guidance("dengue summary")
+    assert "paracetamol" in guidance.lower()
+    assert "aspirin" in guidance.lower() or "ibuprofen" in guidance.lower()
+
+    # 3. Fallback response is transparent and has zero citations
+    fallback = _fallback_offline_knowledge("dengue", "test_offline")
+    assert fallback["is_live"] is False
+    assert fallback["sources"] == []
+    assert len(fallback["summary"]) > 0
+
 
 

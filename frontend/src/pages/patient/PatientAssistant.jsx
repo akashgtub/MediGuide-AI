@@ -123,6 +123,9 @@ const PatientAssistant = () => {
         disclaimer: data.disclaimer || '',
         reportList: data.report_list || null,
         metricData: data.metric_data || null,
+        sources: data.sources || null,
+        retrievalTimestamp: data.retrieval_timestamp || null,
+        isLive: data.is_live ?? null,
         intent: data.intent || null,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
@@ -210,7 +213,39 @@ const PatientAssistant = () => {
                 }`}
               >
                 <div className="flex items-center justify-between space-x-2 text-[11px] opacity-75 mb-1">
-                  <span className="font-semibold">{isUser ? 'You' : 'MediGuide Assistant'}</span>
+                  <div className="flex items-center space-x-1.5 flex-wrap gap-y-1">
+                    <span className="font-semibold">{isUser ? 'You' : 'MediGuide Assistant'}</span>
+                    {!isUser && m.intent === 'CURRENT_MEDICAL_INFORMATION' && (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-emerald-100 text-emerald-800 border border-emerald-200">
+                        <Globe className="w-2.5 h-2.5 mr-1 text-emerald-600" />
+                        Live Medical Knowledge
+                      </span>
+                    )}
+                    {!isUser && m.intent === 'GENERAL_HEALTH_QUESTION' && (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-blue-100 text-blue-800 border border-blue-200">
+                        <Sparkles className="w-2.5 h-2.5 mr-1 text-blue-600" />
+                        Health Education
+                      </span>
+                    )}
+                    {!isUser && (m.intent === 'REPORT_METRIC_QUERY' || m.intent === 'REPORT_OVERVIEW') && (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-teal-100 text-teal-800 border border-teal-200">
+                        <Activity className="w-2.5 h-2.5 mr-1 text-teal-600" />
+                        Lab Report
+                      </span>
+                    )}
+                    {!isUser && m.intent === 'EMERGENCY' && (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-rose-100 text-rose-800 border border-rose-200">
+                        <AlertCircle className="w-2.5 h-2.5 mr-1 text-rose-600" />
+                        Emergency
+                      </span>
+                    )}
+                    {!isUser && m.intent === 'CLARIFICATION_REQUIRED' && (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-amber-100 text-amber-800 border border-amber-200">
+                        <HelpCircle className="w-2.5 h-2.5 mr-1 text-amber-600" />
+                        Clarification
+                      </span>
+                    )}
+                  </div>
                   <span className="font-mono">{m.timestamp}</span>
                 </div>
 
@@ -241,6 +276,77 @@ const PatientAssistant = () => {
                         Source: {m.metricData.filename}
                       </p>
                     )}
+                  </div>
+                )}
+
+                {/* Fallback warning if live retrieval was unavailable */}
+                {m.intent === 'CURRENT_MEDICAL_INFORMATION' && m.isLive === false && (
+                  <div className="mt-2 p-2 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-[11px] flex items-start space-x-1.5">
+                    <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+                    <span>
+                      Live retrieval from medical databases is currently offline or unreachable. General educational guidance is provided without live verification.
+                    </span>
+                  </div>
+                )}
+
+                {/* Trusted Medical Sources */}
+                {m.sources && m.sources.length > 0 && (
+                  <div className="mt-2.5 pt-2 border-t border-slate-200/80 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <p className="text-[11px] font-bold text-slate-700 uppercase tracking-wider flex items-center">
+                        <Globe className="w-3.5 h-3.5 text-teal-600 mr-1" />
+                        Trusted Medical Sources ({m.sources.length})
+                      </p>
+                      {m.retrievalTimestamp && (
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          Retrieved: {m.retrievalTimestamp}
+                        </span>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      {m.sources.map((s, idx) => (
+                        <div
+                          key={idx}
+                          className="bg-white border border-slate-200 rounded-xl p-2.5 hover:border-teal-400 transition-colors shadow-2xs text-xs space-y-1"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <a
+                              href={s.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="font-semibold text-teal-700 hover:text-teal-900 hover:underline flex items-center gap-1 group text-xs"
+                            >
+                              <span>{s.title}</span>
+                              <ExternalLink className="w-3 h-3 text-teal-500 group-hover:text-teal-700 shrink-0" />
+                            </a>
+                            {s.source_name && (
+                              <span className="text-[10px] font-medium text-slate-500 shrink-0 bg-slate-100 px-1.5 py-0.5 rounded">
+                                {s.source_name}
+                              </span>
+                            )}
+                          </div>
+                          {s.snippet && (
+                            <p className="text-[11px] text-slate-600 leading-relaxed">
+                              {s.snippet}
+                            </p>
+                          )}
+                          <div className="flex items-center justify-between text-[10px] text-slate-400 pt-0.5">
+                            {s.date_modified ? (
+                              <span>Last updated: {s.date_modified}</span>
+                            ) : (s.publication_date || s.published_date) ? (
+                              <span>Published: {s.publication_date || s.published_date}</span>
+                            ) : (
+                              <span>Live official resource</span>
+                            )}
+                            {s.language_note && (
+                              <span className="text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-medium">
+                                {s.language_note}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
 
