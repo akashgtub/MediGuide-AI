@@ -16,6 +16,7 @@ Safety & Compliance:
 """
 
 import os
+import sys
 import time
 import uuid
 import asyncio
@@ -23,8 +24,18 @@ import logging
 import tempfile
 import threading
 import concurrent.futures
+from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Optional, Dict, Any, List
+
+# Ensure repository root is on sys.path regardless of whether uvicorn is launched from repo root or backend/
+_REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+_BACKEND_DIR = str(Path(__file__).resolve().parent)
+if _BACKEND_DIR not in sys.path:
+    sys.path.insert(0, _BACKEND_DIR)
+
 from fastapi import FastAPI, File, UploadFile, HTTPException, status, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -33,6 +44,7 @@ from ai.document_processor import (
     extract_text_from_document,
     process_document,
     get_ocr_engine,
+    extract_text_from_pdf_native,
     SUPPORTED_EXTENSIONS,
 )
 from ai.medical_extractor import extract_medical_info, get_ner_pipeline
@@ -74,6 +86,23 @@ from backend.auth import (
     require_role,
 )
 
+# Prevent OpenMP runtime conflict when both Paddle and PyTorch are loaded
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
+# Respect explicit environment setting; if unset, check local cache to avoid blocking network retries
+if "HF_HUB_OFFLINE" not in os.environ:
+    has_local_cache = os.path.exists(os.path.expanduser("~/.cache/huggingface/hub"))
+    os.environ["HF_HUB_OFFLINE"] = "1" if has_local_cache else "0"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1" if has_local_cache else "0"
+
+import torch
+# Configure optimal PyTorch CPU threads for inference to avoid Windows OpenMP lock contention
+optimal_threads = min(4, max(1, (os.cpu_count() or 4) // 2))
+try:
+    torch.set_num_threads(optimal_threads)
+except Exception:
+    pass
+
 SERVER_START_TIME = time.time()
 
 # Configure privacy-safe logger
@@ -105,7 +134,11 @@ def warmup_models() -> None:
     so all weights, tokenizers, and engines are cached in memory before user requests arrive.
     Prevents cold-start pauses on initial document uploads.
     """
-    logger.info("Initiating backend model background warmup...")
+    try:
+        torch.set_num_threads(optimal_threads)
+    except Exception:
+        pass
+    logger.info("Initiating backend model background warmup (optimal_threads=%d)...", optimal_threads)
 
     # 1. Biomedical NER model warmup
     try:
@@ -177,15 +210,24 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS configured for local React development
+# CORS configured for local React development and production Render deployments
+allowed_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+env_cors = os.environ.get("CORS_ORIGINS") or os.environ.get("MEDIGUIDE_CORS_ORIGINS")
+if env_cors:
+    for o in env_cors.split(","):
+        clean_origin = o.strip()
+        if clean_origin and clean_origin not in allowed_origins:
+            allowed_origins.append(clean_origin)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=allowed_origins,
+    allow_origin_regex=os.environ.get("CORS_ORIGIN_REGEX", r"^https:\/\/.*\.onrender\.com$"),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -241,66 +283,187 @@ def _execute_pipeline_in_worker_thread(
 ) -> Dict[str, Any]:
     """
     Synchronous CPU-bound pipeline execution running in a worker thread.
-    Enforces a processing budget with stage-level deadlines.
+    Enforces a processing budget with stage-level deadlines and diagnostic logging.
     Prevents blocking the main FastAPI asyncio event loop.
-    Captures privacy-safe stage timings.
+    Captures privacy-safe stage timings without logging patient text or clinical metrics.
     """
     t_start = time.time()
+    try:
+        torch.set_num_threads(optimal_threads)
+    except Exception:
+        pass
 
-    # Stage 1: Document text extraction (OCR or native PDF)
-    t0 = time.time()
-    raw_text = extract_text_from_document(temp_file_path)
+    _, ext = os.path.splitext(filename)
+    ext_lower = ext.lower()
+    raw_text = ""
+    t_stage2 = 0.0
+    t_stage3 = 0.0
+
+    # Stage 2: PDF text extraction using PyMuPDF
+    t2_start = time.time()
+    if ext_lower == ".pdf":
+        try:
+            raw_text = extract_text_from_pdf_native(temp_file_path)
+            t_stage2 = round(time.time() - t2_start, 4)
+            if raw_text and len(raw_text.strip()) >= 15:
+                logger.info(
+                    "Stage 2 [PDF text extraction using PyMuPDF] SUCCESS: duration=%.4fs, chars=%d",
+                    t_stage2,
+                    len(raw_text.strip()),
+                )
+            else:
+                logger.info(
+                    "Stage 2 [PDF text extraction using PyMuPDF] PARTIAL/EMPTY: duration=%.4fs, chars=%d (invoking OCR fallback)",
+                    t_stage2,
+                    len(raw_text.strip()) if raw_text else 0,
+                )
+        except Exception as exc:
+            t_stage2 = round(time.time() - t2_start, 4)
+            logger.warning(
+                "Stage 2 [PDF text extraction using PyMuPDF] FAILED: exception=%s, duration=%.4fs",
+                type(exc).__name__,
+                t_stage2,
+            )
+            raw_text = ""
+    else:
+        t_stage2 = 0.0
+        logger.info(
+            "Stage 2 [PDF text extraction using PyMuPDF] SKIPPED: Non-PDF format (%s), duration=0.0000s",
+            ext_lower,
+        )
+
+    # Stage 3: PaddleOCR fallback, if needed
+    t3_start = time.time()
+    if not raw_text or len(raw_text.strip()) < 15:
+        try:
+            raw_text = extract_text_from_document(temp_file_path)
+            t_stage3 = round(time.time() - t3_start, 4)
+            logger.info(
+                "Stage 3 [PaddleOCR fallback] SUCCESS: duration=%.4fs, chars=%d",
+                t_stage3,
+                len(raw_text.strip()) if raw_text else 0,
+            )
+        except Exception as exc:
+            t_stage3 = round(time.time() - t3_start, 4)
+            logger.error(
+                "Stage 3 [PaddleOCR fallback] FAILED: exception=%s, duration=%.4fs",
+                type(exc).__name__,
+                t_stage3,
+            )
+            raw_text = ""
+    else:
+        t_stage3 = 0.0
+        logger.info("Stage 3 [PaddleOCR fallback] SKIPPED: Native PDF text sufficient, duration=0.0000s")
+
     cleaned_text = process_document(raw_text)
-    t_ocr = round(time.time() - t0, 3)
-
     if not cleaned_text or not cleaned_text.strip():
-        logger.warning("Stage 1 failure: OCR yielded no readable text (duration=%.2fs)", t_ocr)
+        logger.warning(
+            "Document text extraction yielded no readable text (stage2=%.4fs, stage3=%.4fs)",
+            t_stage2,
+            t_stage3,
+        )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Could not extract readable text from the document. Please ensure the file contains legible text.",
         )
 
-    # Check for existing duplicate report to prevent duplicate reports on client retries
+    # Deduplication check: prevent duplicate reports and review tickets on client retries
     resolved_uid = str(user_id) if user_id else "1"
     existing_report = find_duplicate_report(resolved_uid, filename, cleaned_text)
     if existing_report:
         report_id = existing_report["report_id"]
+        logger.info("Duplicate report detected on retry; reusing existing report_id=%s", report_id)
     else:
         report_id = f"REP-{uuid.uuid4().hex[:8].upper()}"
 
     time_elapsed = time.time() - t_start
     time_remaining = PROCESSING_BUDGET_SECONDS - time_elapsed
 
-    # Stage 2: Biomedical Named Entity Recognition & deterministic metrics
-    t1 = time.time()
-    # Run full NER model if backend is ready and budget permits (> 3.0s);
-    # otherwise fallback immediately to deterministic extractor to prevent cold timeout
-    if model_readiness["ner_ready"] and time_remaining > 3.0:
-        extracted_info = extract_medical_info(cleaned_text, run_ner_model=True)
-    else:
-        logger.info("NER model not ready or low budget (%.2fs); using deterministic extractor fallback.", time_remaining)
+    # Stage 4: Biomedical NER extraction
+    t4_start = time.time()
+    ner_model_used = False
+    try:
+        # Run full NER model if backend is ready and budget permits (> 5.0s)
+        if model_readiness["ner_ready"] and time_remaining > 5.0:
+            extracted_info = extract_medical_info(cleaned_text, run_ner_model=True)
+            ner_model_used = True
+        else:
+            extracted_info = extract_medical_info(cleaned_text, run_ner_model=False)
+            ner_model_used = False
+        t_stage4 = round(time.time() - t4_start, 4)
+        logger.info(
+            "Stage 4 [Biomedical NER extraction] SUCCESS: duration=%.4fs, entities_count=%d, model_used=%s",
+            t_stage4,
+            len(extracted_info.get("entities", [])),
+            ner_model_used,
+        )
+    except Exception as exc:
+        t_stage4 = round(time.time() - t4_start, 4)
+        logger.error(
+            "Stage 4 [Biomedical NER extraction] FAILED: exception=%s, duration=%.4fs; using deterministic extractor",
+            type(exc).__name__,
+            t_stage4,
+        )
         extracted_info = extract_medical_info(cleaned_text, run_ner_model=False)
-    t_ner = round(time.time() - t1, 3)
 
     time_elapsed = time.time() - t_start
     time_remaining = PROCESSING_BUDGET_SECONDS - time_elapsed
 
-    # Stage 3: Medical Summarization with clinical verification
-    t2 = time.time()
-    # If backend summarizer is ready and available, pass time_remaining minus 0.5s safety margin;
-    # otherwise pass 0.0 to safely use deterministic fallback
-    sum_budget = (
-        max(0.0, time_remaining - 0.5)
-        if (model_readiness["summarizer_ready"] and get_summarization_pipeline() is not None)
-        else 0.0
+    # Stage 5: Medical summary generation
+    t5_start = time.time()
+    # On CPU, neural autoregressive generation requires at least 32s to generate and clinically verify.
+    # If remaining budget is < 33.0s or summarizer is not ready, use the safe deterministic fallback (0.001s).
+    use_neural = (
+        model_readiness["summarizer_ready"]
+        and time_remaining >= 33.0
+        and get_summarization_pipeline() is not None
     )
-    summary = summarize_medical_info(extracted_info, source_text=cleaned_text, time_budget_seconds=sum_budget)
-    t_sum = round(time.time() - t2, 3)
+    sum_budget = max(0.0, time_remaining - 1.0) if use_neural else 0.0
 
-    # Stage 4: Risk Evaluation & Human Review Escalation
-    t3 = time.time()
-    risk_result = evaluate_risk(extracted_info)
-    t_risk = round(time.time() - t3, 3)
+    try:
+        summary = summarize_medical_info(
+            extracted_info,
+            source_text=cleaned_text,
+            time_budget_seconds=sum_budget,
+        )
+        t_stage5 = round(time.time() - t5_start, 4)
+        logger.info(
+            "Stage 5 [Medical summary generation] SUCCESS: duration=%.4fs, neural_attempted=%s",
+            t_stage5,
+            use_neural,
+        )
+    except Exception as exc:
+        t_stage5 = round(time.time() - t5_start, 4)
+        logger.error(
+            "Stage 5 [Medical summary generation] FAILED: exception=%s, duration=%.4fs; using deterministic fallback",
+            type(exc).__name__,
+            t_stage5,
+        )
+        summary = summarize_medical_info(
+            extracted_info,
+            source_text=cleaned_text,
+            time_budget_seconds=0.0,
+        )
+
+    # Stage 6: Risk assessment
+    t6_start = time.time()
+    try:
+        risk_result = evaluate_risk(extracted_info)
+        t_stage6 = round(time.time() - t6_start, 4)
+        logger.info(
+            "Stage 6 [Risk assessment] SUCCESS: duration=%.4fs, is_high_risk=%s, uncertainty=%s",
+            t_stage6,
+            risk_result.get("is_high_risk", False),
+            risk_result.get("uncertainty_flag", False),
+        )
+    except Exception as exc:
+        t_stage6 = round(time.time() - t6_start, 4)
+        logger.error(
+            "Stage 6 [Risk assessment] FAILED: exception=%s, duration=%.4fs",
+            type(exc).__name__,
+            t_stage6,
+        )
+        risk_result = {"is_high_risk": False, "uncertainty_flag": True, "reasons": ["Risk evaluation encountered an error."]}
 
     guidance = []
     review_request = None
@@ -320,15 +483,16 @@ def _execute_pipeline_in_worker_thread(
             "Prepare questions for a doctor and bring relevant documents to your next consultation."
         )
 
-    t_total = round(time.time() - t_start, 3)
+    t_total = round(time.time() - t_start, 4)
+    ocr_combined = round(t_stage2 + t_stage3, 4)
 
-    # Privacy-safe logging: log ONLY duration metrics, never document text or clinical values
     logger.info(
-        "Pipeline completed successfully: ocr=%.2fs, ner=%.2fs, summarizer=%.2fs, risk=%.2fs, total=%.2fs",
-        t_ocr,
-        t_ner,
-        t_sum,
-        t_risk,
+        "Pipeline stages completed: pdf_native=%.4fs, ocr_fallback=%.4fs, ner=%.4fs, summarizer=%.4fs, risk=%.4fs, total=%.4fs",
+        t_stage2,
+        t_stage3,
+        t_stage4,
+        t_stage5,
+        t_stage6,
         t_total,
     )
 
@@ -349,10 +513,12 @@ def _execute_pipeline_in_worker_thread(
         "guidance": guidance,
         "disclaimer": disclaimer,
         "timings": {
-            "ocr_seconds": t_ocr,
-            "ner_seconds": t_ner,
-            "summarizer_seconds": t_sum,
-            "risk_seconds": t_risk,
+            "pdf_native_seconds": t_stage2,
+            "ocr_fallback_seconds": t_stage3,
+            "ocr_seconds": ocr_combined,
+            "ner_seconds": t_stage4,
+            "summarizer_seconds": t_stage5,
+            "risk_seconds": t_stage6,
             "total_seconds": t_total,
         },
     }
@@ -380,8 +546,18 @@ async def upload_document(
     Accept an uploaded medical document (image or PDF), stream to a temporary file,
     and dispatch CPU-heavy inference to a worker thread so the event loop remains responsive.
     Persists resulting findings and summary to SQLite database.
+    Logs stages 1, 7, and 8 with safe privacy diagnostics.
     """
+    t_request_start = time.time()
+    t_stage1_start = time.time()
+
+    # Stage 1: Upload receipt and file validation
     if not file.filename:
+        t_stage1 = round(time.time() - t_stage1_start, 4)
+        logger.warning(
+            "Stage 1 [Upload receipt and file validation] FAILED: No filename provided, duration=%.4fs",
+            t_stage1,
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No filename provided in upload.",
@@ -391,6 +567,12 @@ async def upload_document(
     ext_lower = ext.lower()
 
     if ext_lower not in SUPPORTED_EXTENSIONS:
+        t_stage1 = round(time.time() - t_stage1_start, 4)
+        logger.warning(
+            "Stage 1 [Upload receipt and file validation] FAILED: Unsupported extension '%s', duration=%.4fs",
+            ext,
+            t_stage1,
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unsupported file format '{ext}'. Supported formats: {', '.join(sorted(SUPPORTED_EXTENSIONS))}",
@@ -409,6 +591,11 @@ async def upload_document(
             content_length += len(chunk)
             if content_length > MAX_FILE_SIZE_BYTES:
                 temp_file.close()
+                t_stage1 = round(time.time() - t_stage1_start, 4)
+                logger.warning(
+                    "Stage 1 [Upload receipt and file validation] FAILED: File exceeds 10MB limit, duration=%.4fs",
+                    t_stage1,
+                )
                 raise HTTPException(
                     status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                     detail="File exceeds maximum allowed size of 10 MB.",
@@ -418,15 +605,22 @@ async def upload_document(
 
         # Reject 0-byte files
         if content_length == 0:
+            t_stage1 = round(time.time() - t_stage1_start, 4)
+            logger.warning(
+                "Stage 1 [Upload receipt and file validation] FAILED: File empty (0 bytes), duration=%.4fs",
+                t_stage1,
+            )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="The uploaded file is empty (0 bytes).",
             )
 
+        t_stage1 = round(time.time() - t_stage1_start, 4)
         logger.info(
-            "Document received: extension=%s, size=%d bytes (dispatched to worker thread)",
+            "Stage 1 [Upload receipt and file validation] SUCCESS: format=%s, size=%d bytes, duration=%.4fs",
             ext_lower,
             content_length,
+            t_stage1,
         )
 
         # Offload synchronous CPU-heavy inference to dedicated worker thread with processing budget
@@ -444,7 +638,8 @@ async def upload_document(
                 timeout=PROCESSING_BUDGET_SECONDS,
             )
 
-            # Downstream persistence: Save report to SQLite database off the main event loop
+            # Stage 7: Database persistence
+            t7_start = time.time()
             try:
                 await asyncio.to_thread(
                     save_report,
@@ -459,12 +654,38 @@ async def upload_document(
                     disclaimer=result["disclaimer"],
                     timings=result["timings"],
                 )
+                t_stage7 = round(time.time() - t7_start, 4)
+                logger.info(
+                    "Stage 7 [Database persistence] SUCCESS: report_id=%s, user_id=%s, duration=%.4fs",
+                    result["report_id"],
+                    user_id,
+                    t_stage7,
+                )
             except Exception as db_err:
-                logger.warning("Could not persist report to database: %s", db_err)
+                t_stage7 = round(time.time() - t7_start, 4)
+                logger.warning(
+                    "Stage 7 [Database persistence] FAILED: exception=%s, duration=%.4fs (%s)",
+                    type(db_err).__name__,
+                    t_stage7,
+                    db_err,
+                )
+
+            # Stage 8: Final API response
+            t_total_req = round(time.time() - t_request_start, 4)
+            logger.info(
+                "Stage 8 [Final API response] SUCCESS: status_code=200, report_id=%s, total_duration=%.4fs",
+                result["report_id"],
+                t_total_req,
+            )
 
             return result
         except asyncio.TimeoutError:
-            logger.warning("Upload processing exceeded %.1fs budget timeout.", PROCESSING_BUDGET_SECONDS)
+            t_timeout = round(time.time() - t_request_start, 4)
+            logger.warning(
+                "Stage 8 [Final API response] FAILED: Upload processing exceeded %.1fs budget timeout (elapsed=%.4fs)",
+                PROCESSING_BUDGET_SECONDS,
+                t_timeout,
+            )
             raise HTTPException(
                 status_code=status.HTTP_504_GATEWAY_TIMEOUT,
                 detail=f"Processing timed out after {int(PROCESSING_BUDGET_SECONDS)} seconds. Please try a clearer or smaller document.",
@@ -890,3 +1111,12 @@ def system_stats() -> Dict[str, Any]:
             {"name": "SQLite ACID Persistence Engine", "status": "Operational"},
         ],
     }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    host = os.environ.get("HOST", "0.0.0.0")
+    logger.info("Starting MediGuide-AI backend on %s:%d", host, port)
+    uvicorn.run("backend.app:app", host=host, port=port, reload=False)
+

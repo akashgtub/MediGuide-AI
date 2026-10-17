@@ -2,8 +2,22 @@ import { createContext, useState, useContext, useEffect } from 'react';
 
 const AuthContext = createContext(null);
 
+// Centralized API Base URL resolver for production deployment (e.g. Render Web Service).
+// Defaults to empty string in development so requests route through Vite dev server proxy.
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '');
+
+export const resolveApiUrl = (endpoint) => {
+  if (!endpoint) return '';
+  if (endpoint.startsWith('http://') || endpoint.startsWith('https://')) {
+    return endpoint;
+  }
+  const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  return API_BASE_URL ? `${API_BASE_URL}${cleanEndpoint}` : cleanEndpoint;
+};
+
 // Centralized helper for authenticated fetch calls with Bearer token
 export const apiFetch = async (url, options = {}) => {
+  const fullUrl = resolveApiUrl(url);
   const token = localStorage.getItem('mediguide_token');
   const headers = new Headers(options.headers || {});
   
@@ -11,7 +25,7 @@ export const apiFetch = async (url, options = {}) => {
     headers.set('Authorization', `Bearer ${token}`);
   }
 
-  const response = await fetch(url, { ...options, headers });
+  const response = await fetch(fullUrl, { ...options, headers });
   
   // If unauthorized, clear invalid token
   if (response.status === 401 && !url.includes('/api/auth/login')) {
@@ -48,7 +62,7 @@ export const AuthProvider = ({ children }) => {
   const login = async (email, password = '') => {
     // Attempt backend authentication
     try {
-      const res = await fetch('/api/auth/login', {
+      const res = await apiFetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: email.trim(), password: password || 'patient123' })

@@ -51,6 +51,7 @@ EMERGENCY_KEYWORDS = [
     "suffocating", "severe chest pressure", "coughing blood", "coughing up blood",
     "vomiting blood", "anaphylaxis", "severe allergic reaction", "sudden numbness",
     "paralysis", "slurred speech", "seizure", "convulsions", "bluish lips", "cyanosis",
+    "uncontrolled bleeding", "profuse bleeding", "profuse uncontrolled bleeding", "bleeding profusely",
     # Tamil
     "நெஞ்சு வலி", "மாரடைப்பு", "மூச்சுத்திணறல்", "சுவாசிப்பதில் சிரமம்",
     "கடுமையான தலைவலி", "மயக்கம்", "சுயநினைவு இழப்பு", "மூச்சு விட முடியவில்லை",
@@ -167,6 +168,8 @@ def _detect_emergency_intent(text: str) -> bool:
     for kw in EMERGENCY_KEYWORDS:
         if kw in text_lower:
             return True
+    if re.search(r'\b(?:profuse|uncontrolled|severe|heavy)\s+bleeding\b', text_lower):
+        return True
     return False
 
 
@@ -283,6 +286,193 @@ def _detect_greeting_intent(text: str) -> bool:
         if text_clean == g or text_clean.startswith(g + " ") or text_clean.endswith(" " + g):
             return True
     return False
+
+
+APPOINTMENT_PATTERNS = [
+    "can i book doctor", "can i book a doctor", "book doctor", "book a doctor",
+    "book appointment", "book an appointment", "schedule appointment", "schedule an appointment",
+    "make an appointment", "see a doctor", "how can i see a doctor", "i want to see a doctor",
+    "i want to book an appointment", "doctor appointment", "need an appointment", "want to book doctor",
+    "can i see a doctor", "can i see doctor", "consult doctor", "consult a doctor", "make appointment",
+    "book a consultation", "schedule consultation", "want to consult doctor", "book with doctor",
+    "appointment with a doctor", "appointment with doctor", "schedule with doctor",
+    "i need to see a doctor", "can you book a doctor", "can you book doctor",
+    "book an appointment with a doctor", "book a visit with a doctor", "can i make an appointment",
+    # Multilingual patterns
+    "மருத்துவரை முன்பதிவு", "மருத்துவர் அப்பாயிண்ட்மெண்ட்", "மருத்துவரை பார்க்க", "அப்பாயிண்ட்மெண்ட் பதிவு", "டாக்டர் முன்பதிவு", "டாக்டர் அப்பாயிண்ட்மெண்ட்",
+    "डॉक्टर बुक", "डॉक्टर अप्वाइंटमेंट", "डॉक्टर से मिलना", "अप्वाइंटमेंट बुक", "डॉक्टर की बुकिंग", "डॉक्टर को दिखाना",
+    "డాక్టర్‌ను బుక్", "డాక్టర్ అపాయింట్‌మెంట్", "డాక్టర్‌ని కలవాలి", "అపాయింట్‌మెంట్ బుక్",
+    "ഡോക്ടറെ ബുക്ക്", "ഡോക്ടർ അപ്പോയിന്റ്മെന്റ്", "ഡോക്ടറെ കാണണം", "അപ്പോയിന്റ്മെന്റ് ബുക്കിംഗ്",
+    "ವೈದ್ಯರನ್ನು ಬುಕ್", "ವೈದ್ಯರ ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್", "ವೈದ್ಯರನ್ನು ಭೇಟಿ", "ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ಬುಕ್",
+]
+
+AFFIRMATIVE_WORDS = [
+    "yes", "yep", "yeah", "sure", "yup", "definitely", "certainly", "ok", "okay",
+    "yes please", "please do", "yes i want", "yes book", "i do", "correct",
+    "right", "absolutely", "of course", "yes i would", "i would", "affirmative",
+    "book with doctor", "doctor available", "through mediguide", "with a doctor",
+    # Indic words
+    "ஆம்", "சரி", "ஆமாம்",
+    "हाँ", "जी हाँ", "हाँ जी", "सही",
+    "అవును", "సరే",
+    "അതെ", "ശരി",
+    "ಹೌದು", "ಸರಿ",
+]
+
+NEGATIVE_WORDS = [
+    "no", "nope", "nah", "not now", "no thanks", "dont", "don't", "never",
+    "இல்லை", "வேண்டாம்", "नहीं", "ना", "కాదు", "వద్దు", "ഇല്ല", "വേണ്ട", "ಇಲ್ಲ", "ಬೇಡ"
+]
+
+PREPARATION_WORDS = [
+    "prepare", "preparing", "help preparing", "prepare to contact", "prepare to contact a doctor",
+    "contact a doctor", "prepare questions", "checklist", "questions for doctor", "prep",
+    "help me prepare", "preparation", "prepare visit",
+    # Indic words
+    "தயாராக", "கேள்விகளை தயார்", "தொடர்பு கொள்ள",
+    "तैयारी", "प्रश्न तैयार", "संपर्क की तैयारी",
+    "సిద్ధం", "ప్రశ్నలు సిద్ధం",
+    "തയ്യാറാക്കുക", "ചോദ്യങ്ങൾ തയ്യാറാക്കുക",
+    "ಸಿದ್ಧತೆ", "ಪ್ರಶ್ನೆಗಳನ್ನು ಸಿದ್ಧಪಡಿಸಿ",
+]
+
+
+def _detect_appointment_booking_request(text: str) -> bool:
+    """Check if message is asking to book or schedule a doctor appointment."""
+    text_clean = text.lower().strip()
+    if any(p in text_clean for p in APPOINTMENT_PATTERNS):
+        return True
+    if re.search(r'\b(?:can\s+i\s+)?(?:book|schedule|make|request)\s+(?:an?\s+)?(?:doctor|appointment|consultation)\b', text_clean):
+        return True
+    if re.search(r'\b(?:can\s+i|how\s+to|want\s+to|need\s+to)\s+(?:book|see|consult)\s+(?:a\s+)?doctor\b', text_clean):
+        return True
+    return False
+
+
+def _detect_affirmative(text: str) -> bool:
+    """Check if input is an affirmative response (yes, sure, ok, etc.)."""
+    text_clean = re.sub(r'[^a-zA-Z\u0900-\u0D7F]', ' ', text.lower()).strip()
+    words = text_clean.split()
+    if not words:
+        return False
+    if len(words) > 4:
+        return False
+    if text_clean in AFFIRMATIVE_WORDS:
+        return True
+    if any(w in ("yes", "yeah", "yep", "sure", "ok", "okay", "हाँ", "ஆம்", "అవును", "അതെ", "ಹೌದು") for w in words):
+        return True
+    return any(p == text_clean for p in AFFIRMATIVE_WORDS)
+
+
+def _detect_negative(text: str) -> bool:
+    """Check if input is a negative response (no, not now, etc.)."""
+    text_clean = re.sub(r'[^a-zA-Z\u0900-\u0D7F]', ' ', text.lower()).strip()
+    words = text_clean.split()
+    if not words:
+        return False
+    if text_clean in NEGATIVE_WORDS:
+        return True
+    if len(words) <= 3 and any(w in ("no", "nope", "not", "இல்லை", "नहीं", "కాదు", "ഇല്ല", "ಇಲ್ಲ") for w in words):
+        return True
+    return False
+
+
+def _detect_appointment_preparation(text: str) -> bool:
+    """Check if input is asking to prepare for a doctor contact or consultation."""
+    text_clean = text.lower().strip()
+    return any(p in text_clean for p in PREPARATION_WORDS)
+
+
+
+def _detect_symptom_duration_or_temp(text: str) -> Optional[Dict[str, str]]:
+    """
+    Detect if text provides a duration or body temperature measurement in response
+    to symptom inquiries (e.g. 'two days', '2 days', 'since yesterday', '101.5', '102 F').
+    """
+    text_clean = text.lower().strip()
+    res = {}
+
+    # 1. Temperature detection
+    temp_m = re.search(r'\b(10[0-5](?:\.[0-9]+)?|9[7-9](?:\.[0-9]+)?)\s*(?:°\s*[fF]|degrees?\s*[fF]?|[fF])?\b', text_clean)
+    if temp_m:
+        val = temp_m.group(1)
+        res["temperature"] = f"{val}°F"
+
+    temp_c_m = re.search(r'\b([3-4][0-9](?:\.[0-9]+)?)\s*(?:°\s*[cC]|degrees?\s*[cC]?|[cC])\b', text_clean)
+    if temp_c_m:
+        val = temp_c_m.group(1)
+        res["temperature"] = f"{val}°C"
+
+    # 2. Duration detection
+    dur_m = re.search(r'\b(?:for\s+)?(?:about\s+)?([0-9]+|one|two|three|four|five|six|seven|eight|nine|ten|a|an)\s+(days?|weeks?|hours?|months?)\b', text_clean)
+    if dur_m:
+        res["duration"] = dur_m.group(0).strip()
+    elif re.search(r'\b(?:since\s+(?:yesterday|today|last\s+night|[0-9]+\s+days?)|few\s+days|couple\s+of\s+days)\b', text_clean):
+        dur_m2 = re.search(r'\b(?:since\s+(?:yesterday|today|last\s+night|[0-9]+\s+days?)|few\s+days|couple\s+of\s+days)\b', text_clean)
+        res["duration"] = dur_m2.group(0).strip()
+    else:
+        indic_durations = [
+            ("இரண்டு நாட்கள்", "2 days"), ("2 நாட்கள்", "2 days"), ("நேற்றிலிருந்து", "since yesterday"),
+            ("दो दिन", "2 days"), ("2 दिन", "2 days"), ("कल से", "since yesterday"), ("दो दिनों से", "2 days"),
+            ("రెండు రోజులు", "2 days"), ("2 రోజులు", "2 days"),
+            ("രണ്ട് ദിവസം", "2 days"), ("2 ദിവസം", "2 days"),
+            ("ಎರಡು ದಿನಗಳು", "2 days"), ("2 ದಿನಗಳು", "2 days")
+        ]
+        for ind_pat, eng_equiv in indic_durations:
+            if ind_pat in text_clean:
+                res["duration"] = ind_pat
+                break
+
+    return res if res else None
+
+
+def _detect_symptom_inquiry(text: str) -> Optional[str]:
+    """
+    Check if query is reporting or asking about a medical symptom
+    (e.g. fever, headache, cough, etc.).
+    Returns canonical symptom name ('fever', 'headache', 'cough') or None.
+    """
+    text_lower = text.lower().strip()
+
+    # Never treat queries with personal possessives about user's own report data as symptom inquiry
+    personal_markers = ["my report", "my hemoglobin", "my blood pressure", "my result", "my test", "in my report", "my reading", "my value"]
+    if any(pm in text_lower for pm in personal_markers):
+        return None
+
+    # Exclude general disease mechanism or cause questions (routed to GENERAL_HEALTH_QUESTION)
+    if any(q in text_lower for q in ["what causes", "causes of", "cause of", "why do i have", "why does", "காரணம்", "कारण"]):
+        return None
+
+    # Exclude clinical narrative statements mentioning medication intake (e.g. taking aspirin)
+    if any(w in text_lower for w in ["taking aspirin", "taking ibuprofen", "am taking", "have been taking", "taking medication", "prescribed"]):
+        return None
+
+    # Fever
+    fever_markers = [
+        "fever", "having fever", "i have fever", "i have a fever", "got fever", "running a fever",
+        "mild fever", "high fever", "feverish", "have had fever", "have had a fever",
+        "காய்ச்சல்", "புதச்சல்", "बुखार", "జ్వరం", "പനി", "ಜ್ವರ"
+    ]
+    if any(re.search(r'\b' + re.escape(m) + r'\b', text_lower) or m in text_lower for m in fever_markers):
+        return "fever"
+
+    # Headache
+    headache_markers = [
+        "headache", "i have headache", "i have a headache", "having headache", "bad headache",
+        "migraine", "severe headache", "தலைவலி", "सिरदर्द", "తలనొప్పి", "തലവേദന", "ತಲೆನೋವು"
+    ]
+    if any(re.search(r'\b' + re.escape(m) + r'\b', text_lower) or m in text_lower for m in headache_markers):
+        return "headache"
+
+    # Cough
+    cough_markers = [
+        "cough", "i have cough", "i have a cough", "having cough", "coughing",
+        "இருமல்", "खांसी", "దగ్గు", "ചുമ", "ಕೆಮ್ಮು"
+    ]
+    if any(re.search(r'\b' + re.escape(m) + r'\b', text_lower) or m in text_lower for m in cough_markers):
+        return "cough"
+
+    return None
 
 
 def _detect_report_list_intent(text: str) -> bool:
@@ -522,13 +712,18 @@ def _extract_conversation_context(
     user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Extract active clinical entities from multi-turn conversation history:
+    Extract active clinical entities and conversation state from multi-turn history:
     - last_metric: canonical name of last discussed metric (e.g. 'Hemoglobin', 'Blood Pressure')
     - last_value: string value (e.g. '14.2', '180/110')
     - last_unit: string unit (e.g. 'g/dL', 'mmHg')
     - last_filename: report filename (e.g. 'cbc_report.pdf')
     - last_report_id: report ID if known
     - last_date: string date of the test/report
+    - last_symptom: canonical symptom discussed (e.g. 'fever', 'headache', 'cough')
+    - last_intent: intent of the previous assistant/user turn
+    - pending_intent: active awaiting question from assistant (e.g. 'APPOINTMENT_BOOKING_CHOICE')
+    - user_name: user's stated name from introduction
+    - last_assistant_text: text of most recent assistant turn
     """
     ctx: Dict[str, Any] = {
         "last_metric": None,
@@ -537,6 +732,11 @@ def _extract_conversation_context(
         "last_filename": None,
         "last_report_id": None,
         "last_date": None,
+        "last_symptom": None,
+        "last_intent": None,
+        "pending_intent": None,
+        "user_name": None,
+        "last_assistant_text": None,
     }
     if not conversation_history:
         return ctx
@@ -546,6 +746,52 @@ def _extract_conversation_context(
         raw_text = (msg.get("text") or msg.get("content") or "").strip()
         if not raw_text:
             continue
+
+        sender = msg.get("sender") or msg.get("role") or ""
+
+        # Track most recent assistant message & its pending prompts
+        if sender in ("assistant", "system") and not ctx["last_assistant_text"]:
+            ctx["last_assistant_text"] = raw_text
+            if msg.get("intent"):
+                ctx["last_intent"] = msg.get("intent")
+
+            asst_lower = raw_text.lower()
+            if any(p in asst_lower for p in [
+                "appointment process", "available through mediguide-ai", "preparing to contact a doctor",
+                "book an appointment", "help booking an appointment", "அப்பாயிண்ட்மெண்ட் செயல்முறை",
+                "अपॉइंटमेंट प्रक्रिया", "అపాయింట్‌మెంట్ ప్రక్రియ", "അപ്പോയിന്റ്മെന്റ് പ്രക്രിയ", "ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ಪ್ರಕ್ರಿಯೆ"
+            ]):
+                ctx["pending_intent"] = "APPOINTMENT_BOOKING_CHOICE"
+                if not ctx["last_intent"]:
+                    ctx["last_intent"] = "APPOINTMENT_BOOKING_REQUEST"
+            elif any(p in asst_lower for p in [
+                "how long has the fever lasted", "temperature reading", "other symptoms, such as",
+                "experiencing other symptoms", "how long have you had the fever"
+            ]):
+                ctx["pending_intent"] = "SYMPTOM_FOLLOWUP_DETAILS"
+                if not ctx["last_symptom"]:
+                    ctx["last_symptom"] = "fever"
+
+        # Track symptoms mentioned in history
+        if not ctx["last_symptom"]:
+            txt_lower = raw_text.lower()
+            if any(w in txt_lower for w in ["fever", "காய்ச்சல்", "बुखार", "జ్వరం", "പനി", "ಜ್ವರ"]):
+                ctx["last_symptom"] = "fever"
+            elif any(w in txt_lower for w in ["headache", "தலைவலி", "सिरदर्द", "తలనొప్పి", "തലവേദന", "ತಲೆನೋವು"]):
+                ctx["last_symptom"] = "headache"
+            elif any(w in txt_lower for w in ["cough", "இருமல்", "खांसी", "దగ్గు", "ചുമ", "ಕೆಮ್ಮು"]):
+                ctx["last_symptom"] = "cough"
+
+        # Track user name from user introduction
+        if not ctx["user_name"]:
+            if sender in ("user", "patient") or not sender:
+                uname = _detect_user_introduction(raw_text)
+                if uname:
+                    ctx["user_name"] = uname
+            else:
+                nm_m = re.search(r"Nice to meet you, ([A-Za-z\u0B80-\u0DFF\u0900-\u097F]+)", raw_text)
+                if nm_m:
+                    ctx["user_name"] = nm_m.group(1).strip()
 
         # 1. Extract metric
         if not ctx["last_metric"]:
@@ -582,7 +828,11 @@ def _extract_conversation_context(
 
         # 3. Extract filename
         if not ctx["last_filename"]:
-            fn_m = re.search(r'([a-zA-Z0-9_\-\.\s]+?\.(?:pdf|png|jpg|jpeg|txt))', raw_text, re.IGNORECASE)
+            fn_m = (
+                re.search(r'(?:in|from|report|file)\s+[\'\"\(]?([A-Za-z0-9_\-]+(?:\s+[A-Za-z0-9_\-]+)*\.(?:pdf|png|jpg|jpeg|txt))', raw_text, re.IGNORECASE)
+                or re.search(r'\b([A-Za-z0-9_\-]+\.(?:pdf|png|jpg|jpeg|txt))\b', raw_text, re.IGNORECASE)
+                or re.search(r'([a-zA-Z0-9_\-\.\s]+?\.(?:pdf|png|jpg|jpeg|txt))', raw_text, re.IGNORECASE)
+            )
             if fn_m:
                 ctx["last_filename"] = fn_m.group(1).strip()
 
@@ -711,19 +961,23 @@ def classify_patient_intent(
 ) -> str:
     """
     Deterministic intent router for patient assistant messages.
-    Returns one of the 12 supported intents:
+    Returns one of the supported intents:
     1. EMERGENCY: potentially urgent symptoms.
-    2. CLARIFICATION_REQUIRED: isolated short interrogatives like 'what', 'huh', '?'.
-    3. USER_INTRODUCTION: my name is Akash, I am Akash.
-    4. IDENTITY: what is your name, who are you, what can you do?
-    5. GREETING: hi, hello, hey, good morning.
-    6. CURRENT_MEDICAL_INFORMATION: what is the latest treatment for dengue?
-    7. REPORT_LIST: show my reports, list my uploaded reports.
-    8. REPORT_METRIC_QUERY: what was my hemoglobin, what is my blood pressure?
-    9. REPORT_OVERVIEW: summarize my CBC report, explain my report.
-    10. FOLLOW_UP: is that normal, when was that, which doctor should I see?
-    11. GENERAL_HEALTH_QUESTION: fever, headache, what causes diabetes, what causes fever?
-    12. DOCUMENT_NARRATIVE: explicit clinical record text / multiline document text.
+    2. APPOINTMENT_BOOKING_REQUEST: can i book doctor, schedule appointment.
+    3. APPOINTMENT_BOOKING_CONFIRMATION: affirmative/choice in appointment flow.
+    4. FOLLOW_UP_SYMPTOM: duration, temperature, or repeated symptom keyword in active symptom context.
+    5. USER_INTRODUCTION: my name is Akash, I am Akash.
+    6. IDENTITY: what is your name, who are you, what can you do?
+    7. GREETING: hi, hello, hey, good morning.
+    8. CURRENT_MEDICAL_INFORMATION: what is the latest treatment for dengue?
+    9. REPORT_LIST: show my reports, list my uploaded reports.
+    10. REPORT_METRIC_QUERY: what was my hemoglobin, what is my blood pressure?
+    11. FOLLOW_UP: is that normal, when was that, which doctor should I see?
+    12. REPORT_OVERVIEW: summarize my CBC report, explain my report.
+    13. SYMPTOM_EDUCATION: i have fever, headache, fever symptom inquiry.
+    14. GENERAL_HEALTH_QUESTION: what causes diabetes, what causes fever, hypertension causes.
+    15. DOCUMENT_NARRATIVE: explicit clinical record text / multiline document text.
+    16. CLARIFICATION_REQUIRED: isolated short interrogatives like 'what', 'huh', '?' or unhandled inputs.
     """
     if not text or not text.strip():
         return "CLARIFICATION_REQUIRED"
@@ -732,47 +986,83 @@ def classify_patient_intent(
     if _detect_emergency_intent(text):
         return "EMERGENCY"
 
-    # Priority 2: Clarification Required for short, isolated interrogatives ("what", "huh", "?")
+    # Priority 2: Contextual Appointment Booking Confirmation / Response
+    if conversation_context:
+        pending = conversation_context.get("pending_intent")
+        last_int = conversation_context.get("last_intent")
+
+        # 2a. Doctor booking flow continuation
+        if pending == "APPOINTMENT_BOOKING_CHOICE" or last_int == "APPOINTMENT_BOOKING_REQUEST":
+            if (_detect_affirmative(text)
+                or _detect_appointment_booking_request(text)
+                or _detect_appointment_preparation(text)
+                or _detect_negative(text)
+                or "book" in text.lower()):
+                return "APPOINTMENT_BOOKING_CONFIRMATION"
+
+        # 2b. Active symptom follow-up
+        if conversation_context.get("last_symptom"):
+            symptom = conversation_context.get("last_symptom")
+            # Duration or temperature response: "two days", "101.5", "102 F"
+            if _detect_symptom_duration_or_temp(text) is not None:
+                return "FOLLOW_UP_SYMPTOM"
+            # User repeats the symptom keyword: "fever"
+            text_clean = re.sub(r'[^\w\s\u0900-\u0D7F]', '', text.lower()).strip()
+            if text_clean == symptom or (len(text_clean.split()) <= 3 and symptom in text_clean.split()):
+                return "FOLLOW_UP_SYMPTOM"
+            # User answers "yes" to "are you experiencing other symptoms?"
+            if _detect_affirmative(text) and pending == "SYMPTOM_FOLLOWUP_DETAILS":
+                return "FOLLOW_UP_SYMPTOM"
+
+    # Priority 3: Clarification Required for short, isolated interrogatives ("what", "huh", "?")
     if _detect_clarification_required(text):
         return "CLARIFICATION_REQUIRED"
 
-    # Priority 3: User Introduction ("I am Akash", "My name is Akash")
+    # Priority 4: User Introduction ("I am Akash", "My name is Akash")
     if _detect_user_introduction(text) is not None:
         return "USER_INTRODUCTION"
 
-    # Priority 4: Identity / Capabilities / Prescribing refusal
+    # Priority 5: Identity / Capabilities / Prescribing refusal
     if _detect_identity_intent(text) or any(p in text.lower() for p in PRESCRIBE_DIAGNOSE_PATTERNS):
         return "IDENTITY"
 
-    # Priority 5: Greeting ("hi", "hello", "good morning")
+    # Priority 6: Greeting ("hi", "hello", "good morning")
     if _detect_greeting_intent(text):
         return "GREETING"
 
-    # Priority 6: Current Medical Information Retrieval ("what is the latest treatment for dengue?")
+    # Priority 7: Appointment Booking Request ("can i book doctor", "book appointment")
+    if _detect_appointment_booking_request(text):
+        return "APPOINTMENT_BOOKING_REQUEST"
+
+    # Priority 8: Current Medical Information Retrieval ("what is the latest treatment for dengue?")
     if _detect_current_medical_information(text):
         return "CURRENT_MEDICAL_INFORMATION"
 
-    # Priority 7: Explicit Report Listing ("show my reports", "list my uploaded reports")
+    # Priority 9: Explicit Report Listing ("show my reports", "list my uploaded reports")
     if _detect_report_list_intent(text):
         return "REPORT_LIST"
 
-    # Priority 8: Report Metric Query ("what was my hemoglobin", "what is my blood pressure", "what about platelets?")
+    # Priority 10: Report Metric Query ("what was my hemoglobin", "what is my blood pressure")
     if _detect_metric_inquiry(text) and _detect_followup_type(text) is None:
         return "REPORT_METRIC_QUERY"
 
-    # Priority 9: Contextual Follow-up ("is that normal", "when was that", "which doctor should I see", "what other tests")
+    # Priority 11: Contextual Lab Follow-up ("is that normal", "when was that", "which doctor should I see")
     if _detect_followup_question(text, conversation_context):
         return "FOLLOW_UP"
 
-    # Priority 10: Report Overview / Summary ("summarize my CBC report", "explain my report")
+    # Priority 12: Report Overview / Summary ("summarize my CBC report", "explain my report")
     if _detect_report_overview_intent(text):
         return "REPORT_OVERVIEW"
 
-    # Priority 11: General Health Question ("fever", "headache", "what causes fever", "what causes diabetes", "what is hypertension")
+    # Priority 13: Symptom Education ("i have fever", "fever", "headache")
+    if _detect_symptom_inquiry(text) is not None:
+        return "SYMPTOM_EDUCATION"
+
+    # Priority 14: General Health Question ("what causes fever", "what causes diabetes", "what is hypertension")
     if _detect_general_health_question(text):
         return "GENERAL_HEALTH_QUESTION"
 
-    # Priority 12: Explicit Document Narrative Text (OCR record, multiline lab results)
+    # Priority 15: Explicit Document Narrative Text (OCR record, multiline lab results)
     if _detect_document_narrative(text):
         return "DOCUMENT_NARRATIVE"
 
@@ -920,9 +1210,90 @@ def process_patient_request(
         review_request = None
 
     # =========================================================================
-    # INTENT: GENERAL_HEALTH_QUESTION (and GENERAL_MEDICAL_EDUCATION)
+    # INTENT: APPOINTMENT_BOOKING_REQUEST
     # =========================================================================
-    elif intent in ("GENERAL_HEALTH_QUESTION", "GENERAL_MEDICAL_EDUCATION"):
+    elif intent == "APPOINTMENT_BOOKING_REQUEST":
+        summary_en = CONVERSATIONAL_RESPONSES["appointment_booking_offer"]["en"]
+        guidance_en = [
+            "Specify whether you want to book an appointment or prepare to contact a doctor."
+        ]
+        include_disclaimer = False
+        review_request = None
+
+    # =========================================================================
+    # INTENT: APPOINTMENT_BOOKING_CONFIRMATION
+    # =========================================================================
+    elif intent == "APPOINTMENT_BOOKING_CONFIRMATION":
+        if _detect_negative(raw_query):
+            summary_en = (
+                "Understood. Please let me know if you would like assistance with other symptoms, "
+                "general health education, or reviewing an uploaded laboratory report."
+            )
+            guidance_en = []
+        elif _detect_appointment_preparation(raw_query):
+            summary_en = CONVERSATIONAL_RESPONSES["appointment_prep_guidance"]["en"]
+            guidance_en = [
+                "Navigate to 'Appointment Prep' to organize questions and reports for your consultation.",
+                "Prepare a chronological list of symptoms and current medications."
+            ]
+        else:
+            summary_en = CONVERSATIONAL_RESPONSES["appointment_direct_unavailable"]["en"]
+            guidance_en = [
+                "Navigate to 'Appointment Prep' to organize questions and reports for your consultation.",
+                "Bring relevant lab reports and diagnostic records to your appointment."
+            ]
+        include_disclaimer = False
+        review_request = None
+
+    # =========================================================================
+    # INTENT: FOLLOW_UP_SYMPTOM
+    # =========================================================================
+    elif intent == "FOLLOW_UP_SYMPTOM":
+        dur_temp_info = _detect_symptom_duration_or_temp(raw_query)
+        if dur_temp_info and dur_temp_info.get("duration"):
+            dur_text = dur_temp_info["duration"]
+            summary_en = (
+                f"Thank you for sharing that your fever has lasted {dur_text}. "
+                "Have you measured your temperature with a thermometer, and are you experiencing "
+                "any accompanying symptoms such as chills, cough, or body aches?"
+            )
+            guidance_en = [
+                "Monitor your body temperature with a thermometer.",
+                "Stay hydrated with clean fluids and get sufficient rest.",
+                "Seek prompt medical care if the fever exceeds 103°F (39.4°C) or lasts over 3 days."
+            ]
+        elif dur_temp_info and dur_temp_info.get("temperature"):
+            temp_text = dur_temp_info["temperature"]
+            summary_en = (
+                f"A recorded temperature of {temp_text} indicates a fever. "
+                "How many days has this temperature persisted, and are you experiencing "
+                "any accompanying symptoms such as chills, a headache, or a cough?"
+            )
+            guidance_en = [
+                "Monitor your body temperature with a thermometer.",
+                "Stay hydrated with clean fluids and get sufficient rest.",
+                "Seek prompt medical care if the fever exceeds 103°F (39.4°C) or lasts over 3 days."
+            ]
+        elif _detect_affirmative(raw_query):
+            summary_en = (
+                "Which additional symptoms are you experiencing (such as chills, cough, headache, or body aches), "
+                "and how many days have they been present?"
+            )
+            guidance_en = ["Take note of all symptoms and when each began."]
+        else:
+            summary_en = CONVERSATIONAL_RESPONSES["fever_followup_concise"]["en"]
+            guidance_en = [
+                "Monitor your body temperature with a thermometer.",
+                "Stay hydrated with clean fluids and get sufficient rest.",
+                "Seek prompt medical care if the fever exceeds 103°F (39.4°C) or lasts over 3 days."
+            ]
+        include_disclaimer = True
+        review_request = None
+
+    # =========================================================================
+    # INTENT: SYMPTOM_EDUCATION (and GENERAL_HEALTH_QUESTION)
+    # =========================================================================
+    elif intent in ("SYMPTOM_EDUCATION", "GENERAL_HEALTH_QUESTION", "GENERAL_MEDICAL_EDUCATION"):
         q_lower = raw_query.lower()
         if any(w in q_lower for w in ["fever", "காய்ச்சல்", "बुखार", "జ్వరం", "പനി", "ಜ್ವರ"]):
             if any(w in q_lower for w in ["cause", "why", "காரணம்", "कारण", "ఎందుకు", "കാരണം"]):

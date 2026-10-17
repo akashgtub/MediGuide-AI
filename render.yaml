@@ -1,0 +1,33 @@
+services:
+  # MediGuide-AI FastAPI Backend Web Service
+  - type: web
+    name: mediguide-backend
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: MEDIGUIDE_SECRET_KEY
+        generateValue: true
+      - key: CORS_ORIGIN_REGEX
+        value: "https://.*\\.onrender\\.com"
+      - key: HF_HUB_OFFLINE
+        value: "0"
+
+  # MediGuide-AI React Vite Frontend Static Site
+  - type: static
+    name: mediguide-frontend
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_BASE_URL
+        fromService:
+          type: web
+          name: mediguide-backend
+          property: host

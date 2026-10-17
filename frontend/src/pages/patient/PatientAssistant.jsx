@@ -14,6 +14,7 @@ import {
   FileText,
   Activity,
   ExternalLink,
+  Calendar,
 } from 'lucide-react';
 import { useAuth, apiFetch } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
@@ -221,16 +222,46 @@ const PatientAssistant = () => {
                         Live Medical Knowledge
                       </span>
                     )}
-                    {!isUser && m.intent === 'GENERAL_HEALTH_QUESTION' && (
+                    {!isUser && (m.intent === 'APPOINTMENT_BOOKING_REQUEST' || m.intent === 'APPOINTMENT_BOOKING_CONFIRMATION') && (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-indigo-100 text-indigo-800 border border-indigo-200">
+                        <Calendar className="w-2.5 h-2.5 mr-1 text-indigo-600" />
+                        Doctor Appointment
+                      </span>
+                    )}
+                    {!isUser && (m.intent === 'SYMPTOM_EDUCATION' || m.intent === 'GENERAL_HEALTH_QUESTION') && (
                       <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-blue-100 text-blue-800 border border-blue-200">
                         <Sparkles className="w-2.5 h-2.5 mr-1 text-blue-600" />
-                        Health Education
+                        Symptom & Health Education
+                      </span>
+                    )}
+                    {!isUser && m.intent === 'FOLLOW_UP_SYMPTOM' && (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-purple-100 text-purple-800 border border-purple-200">
+                        <Activity className="w-2.5 h-2.5 mr-1 text-purple-600" />
+                        Symptom Follow-up
                       </span>
                     )}
                     {!isUser && (m.intent === 'REPORT_METRIC_QUERY' || m.intent === 'REPORT_OVERVIEW') && (
                       <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-teal-100 text-teal-800 border border-teal-200">
                         <Activity className="w-2.5 h-2.5 mr-1 text-teal-600" />
                         Lab Report
+                      </span>
+                    )}
+                    {!isUser && m.intent === 'REPORT_LIST' && (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-slate-100 text-slate-700 border border-slate-300">
+                        <FileText className="w-2.5 h-2.5 mr-1 text-slate-600" />
+                        Uploaded Reports
+                      </span>
+                    )}
+                    {!isUser && m.intent === 'USER_INTRODUCTION' && (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-teal-100 text-teal-800 border border-teal-200">
+                        <User className="w-2.5 h-2.5 mr-1 text-teal-600" />
+                        Introduction
+                      </span>
+                    )}
+                    {!isUser && m.intent === 'GREETING' && (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-teal-50 text-teal-700 border border-teal-200">
+                        <Bot className="w-2.5 h-2.5 mr-1 text-teal-600" />
+                        Greeting
                       </span>
                     )}
                     {!isUser && m.intent === 'EMERGENCY' && (

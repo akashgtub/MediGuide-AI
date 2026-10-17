@@ -641,7 +641,7 @@ def test_single_word_symptom_inquiry():
     """Verify single-word symptoms provide health education and follow-up questions without diagnosing."""
     # "fever"
     res_fever = process_patient_request("fever", user_id="1")
-    assert res_fever["intent"] == "GENERAL_HEALTH_QUESTION"
+    assert res_fever["intent"] in ("SYMPTOM_EDUCATION", "GENERAL_HEALTH_QUESTION")
     assert res_fever["review_request"] is None
     assert "Hello! I'm MediGuide-AI" not in res_fever["translated_summary"]
     summary_lower = res_fever["translated_summary"].lower()
@@ -652,7 +652,7 @@ def test_single_word_symptom_inquiry():
 
     # "headache"
     res_headache = process_patient_request("headache", user_id="1")
-    assert res_headache["intent"] == "GENERAL_HEALTH_QUESTION"
+    assert res_headache["intent"] in ("SYMPTOM_EDUCATION", "GENERAL_HEALTH_QUESTION")
     summary_h = res_headache["translated_summary"].lower()
     assert "headache" in summary_h
     assert "how long" in summary_h or "duration" in summary_h or "pattern" in summary_h
@@ -909,6 +909,242 @@ def test_live_knowledge_module_unit_behavior():
     assert fallback["is_live"] is False
     assert fallback["sources"] == []
     assert len(fallback["summary"]) > 0
+
+
+# ============================================================================
+# 37. Acceptance Test 1: Doctor-Booking Intent Recognition
+# ============================================================================
+
+def test_acceptance_1_doctor_booking_intent_recognition():
+    """Verify 'can i book doctor' routes to APPOINTMENT_BOOKING_REQUEST and offers natural options."""
+    intent = classify_patient_intent("can i book doctor")
+    assert intent == "APPOINTMENT_BOOKING_REQUEST"
+
+    res = process_patient_request("can i book doctor")
+    assert res["intent"] == "APPOINTMENT_BOOKING_REQUEST"
+    summary = res["translated_summary"]
+    assert "appointment process" in summary.lower()
+    assert "book an appointment with a doctor available through mediguide-ai" in summary.lower()
+    assert "help preparing to contact a doctor" in summary.lower()
+
+
+# ============================================================================
+# 38. Acceptance Test 2 & 3: Direct Booking Unavailable Safe Explanation
+# ============================================================================
+
+def test_acceptance_2_and_3_booking_unavailable_safe_explanation():
+    """Verify system explains direct booking is unavailable, does not invent doctors/slots/IDs, and offers appointment prep."""
+    history = [
+        {"role": "user", "content": "can i book doctor"},
+        {
+            "role": "assistant",
+            "content": "Yes, I can help you with the appointment process. Do you want to book an appointment with a doctor available through MediGuide-AI, or would you like help preparing to contact a doctor?",
+            "intent": "APPOINTMENT_BOOKING_REQUEST"
+        }
+    ]
+    res = process_patient_request("book with doctor", conversation_history=history)
+    assert res["intent"] == "APPOINTMENT_BOOKING_CONFIRMATION"
+    summary = res["translated_summary"]
+    # Explains direct booking is not available
+    assert "not currently available" in summary.lower()
+    # Offers preparation
+    assert "prepare" in summary.lower()
+    # Does NOT invent fake doctor names, fake appointment IDs, or fake slots
+    assert "dr." not in summary.lower()
+    assert "booking id" not in summary.lower()
+    assert "confirmed for" not in summary.lower()
+
+
+# ============================================================================
+# 39. Acceptance Test 4: 'yes' Resolving the Pending Appointment Question
+# ============================================================================
+
+def test_acceptance_4_yes_resolving_pending_question():
+    """Verify 'yes' following appointment offer resolves to APPOINTMENT_BOOKING_CONFIRMATION, not generic clarification."""
+    history = [
+        {"role": "user", "content": "can i book doctor"},
+        {
+            "role": "assistant",
+            "content": "Yes, I can help you with the appointment process. Do you want to book an appointment with a doctor available through MediGuide-AI, or would you like help preparing to contact a doctor?",
+            "intent": "APPOINTMENT_BOOKING_REQUEST"
+        }
+    ]
+    intent = classify_patient_intent("yes", conversation_context={"pending_intent": "APPOINTMENT_BOOKING_CHOICE", "last_intent": "APPOINTMENT_BOOKING_REQUEST"})
+    assert intent == "APPOINTMENT_BOOKING_CONFIRMATION"
+
+    res = process_patient_request("yes", conversation_history=history)
+    assert res["intent"] == "APPOINTMENT_BOOKING_CONFIRMATION"
+    assert "direct doctor booking through mediguide-ai is not currently available" in res["translated_summary"].lower()
+    assert "i'm not sure i understand" not in res["translated_summary"].lower()
+
+
+# ============================================================================
+# 40. Acceptance Test 5: Fever Duration Follow-Up ('two days')
+# ============================================================================
+
+def test_acceptance_5_fever_duration_followup():
+    """Verify 'two days' following fever discussion is interpreted as duration and asks for thermometer / accompanying symptoms."""
+    history = [
+        {"role": "user", "content": "i have fever"},
+        {
+            "role": "assistant",
+            "content": "Fever is a temporary elevation in body temperature. 1. How long has the fever lasted, and what is your temperature reading?",
+            "intent": "SYMPTOM_EDUCATION"
+        }
+    ]
+    intent = classify_patient_intent("two days", conversation_context={"last_symptom": "fever", "pending_intent": "SYMPTOM_FOLLOWUP_DETAILS"})
+    assert intent == "FOLLOW_UP_SYMPTOM"
+
+    res = process_patient_request("two days", conversation_history=history)
+    assert res["intent"] == "FOLLOW_UP_SYMPTOM"
+    summary = res["translated_summary"].lower()
+    assert "two days" in summary
+    assert "thermometer" in summary
+    assert "accompanying symptoms" in summary or "chills" in summary
+
+
+# ============================================================================
+# 41. Acceptance Test 6: No Repetitive Generic Responses
+# ============================================================================
+
+def test_acceptance_6_no_repetitive_generic_responses():
+    """Verify repeating 'fever' in active fever context gives concise follow-up rather than duplicating entire spiel."""
+    history = [
+        {"role": "user", "content": "i have fever"},
+        {
+            "role": "assistant",
+            "content": "Fever is a temporary elevation in body temperature, commonly an immune response to an infection...",
+            "intent": "SYMPTOM_EDUCATION"
+        }
+    ]
+    res = process_patient_request("fever", conversation_history=history)
+    assert res["intent"] == "FOLLOW_UP_SYMPTOM"
+    summary = res["translated_summary"]
+    # Concise follow-up, not repeating the whole introduction and general care definitions
+    assert "Regarding your fever" in summary or "fever has lasted" in summary
+    assert "Fever is a temporary elevation" not in summary
+
+
+# ============================================================================
+# 42. Acceptance Test 7: Conversation-History Handling Across Exact Bug Sequence
+# ============================================================================
+
+def test_acceptance_7_exact_bug_sequence_multi_turn_history():
+    """Verify all 6 turns of the exact user reproduction sequence behave deterministically."""
+    history = []
+
+    # 1. hi
+    r1 = process_patient_request("hi", conversation_history=history)
+    assert r1["intent"] == "GREETING"
+    assert "Hello! I'm MediGuide-AI" in r1["translated_summary"]
+    history.append({"role": "user", "content": "hi"})
+    history.append({"role": "assistant", "content": r1["translated_summary"], "intent": r1["intent"]})
+
+    # 2. i am akash
+    r2 = process_patient_request("i am akash", conversation_history=history)
+    assert r2["intent"] == "USER_INTRODUCTION"
+    assert "Akash" in r2["translated_summary"]
+    history.append({"role": "user", "content": "i am akash"})
+    history.append({"role": "assistant", "content": r2["translated_summary"], "intent": r2["intent"]})
+
+    # 3. i have fever
+    r3 = process_patient_request("i have fever", conversation_history=history)
+    assert r3["intent"] == "SYMPTOM_EDUCATION"
+    assert "Fever is a temporary elevation" in r3["translated_summary"]
+    history.append({"role": "user", "content": "i have fever"})
+    history.append({"role": "assistant", "content": r3["translated_summary"], "intent": r3["intent"]})
+
+    # 4. can i book doctor
+    r4 = process_patient_request("can i book doctor", conversation_history=history)
+    assert r4["intent"] == "APPOINTMENT_BOOKING_REQUEST"
+    assert "appointment process" in r4["translated_summary"].lower()
+    history.append({"role": "user", "content": "can i book doctor"})
+    history.append({"role": "assistant", "content": r4["translated_summary"], "intent": r4["intent"]})
+
+    # 5. yes
+    r5 = process_patient_request("yes", conversation_history=history)
+    assert r5["intent"] == "APPOINTMENT_BOOKING_CONFIRMATION"
+    assert "direct doctor booking" in r5["translated_summary"].lower()
+    history.append({"role": "user", "content": "yes"})
+    history.append({"role": "assistant", "content": r5["translated_summary"], "intent": r5["intent"]})
+
+    # 6. fever
+    r6 = process_patient_request("fever", conversation_history=history)
+    assert r6["intent"] == "FOLLOW_UP_SYMPTOM"
+    assert "Regarding your fever" in r6["translated_summary"] or "fever" in r6["translated_summary"].lower()
+
+
+# ============================================================================
+# 43. Acceptance Test 8: Personal Report Query Isolation
+# ============================================================================
+
+def test_acceptance_8_personal_report_query_isolation():
+    """Verify general symptom and education questions do not touch personal reports, while metric questions require auth."""
+    # General question without user_id has no report_list or metric_data
+    r_gen = process_patient_request("what causes fever?")
+    assert r_gen["intent"] == "GENERAL_HEALTH_QUESTION"
+    assert r_gen.get("report_list") is None
+    assert r_gen.get("metric_data") is None
+
+    # Symptom question without user_id has no report_list or metric_data
+    r_sym = process_patient_request("i have fever")
+    assert r_sym["intent"] == "SYMPTOM_EDUCATION"
+    assert r_sym.get("report_list") is None
+    assert r_sym.get("metric_data") is None
+
+    # Personal metric query with user_id retrieves the authenticated user's metric data
+    r_met = process_patient_request("what was my hemoglobin?", user_id="1")
+    assert r_met["intent"] == "REPORT_METRIC_QUERY"
+    assert r_met.get("metric_data") is not None
+    assert r_met["metric_data"]["metric"] == "Hemoglobin"
+
+
+# ============================================================================
+# 44. Acceptance Test 9: Emergency Safety Handling
+# ============================================================================
+
+def test_acceptance_9_emergency_safety_handling():
+    """Verify emergency symptoms immediately trigger EMERGENCY intent and review escalation."""
+    emergency_inputs = [
+        "I have severe chest pain and cannot breathe",
+        "patient is having a stroke with facial drooping",
+        "profuse uncontrolled bleeding",
+    ]
+    for inp in emergency_inputs:
+        intent = classify_patient_intent(inp)
+        assert intent == "EMERGENCY"
+        res = process_patient_request(inp, user_id="1")
+        assert res["intent"] == "EMERGENCY"
+        assert res["review_request"] is not None
+        assert res["review_request"]["risk_level"] == "HIGH"
+        assert "emergency" in res["translated_summary"].lower()
+
+
+# ============================================================================
+# 45. Acceptance Test 10: Multilingual Behavior and Offline Medical-Source Fallback
+# ============================================================================
+
+def test_acceptance_10_multilingual_and_offline_source_fallback():
+    """Verify multilingual appointment and symptom responses and offline source fallback distinctions."""
+    # 1. Tamil appointment booking
+    res_ta = process_patient_request("மருத்துவரை முன்பதிவு செய்ய முடியுமா", target_language="ta")
+    assert res_ta["intent"] == "APPOINTMENT_BOOKING_REQUEST"
+    assert res_ta["response_language"] == "ta"
+    assert "மருத்துவரை" in res_ta["translated_summary"] or "அப்பாயிண்ட்மெண்ட்" in res_ta["translated_summary"]
+
+    # 2. Hindi appointment booking
+    res_hi = process_patient_request("क्या मैं डॉक्टर बुक कर सकता हूँ", target_language="hi")
+    assert res_hi["intent"] == "APPOINTMENT_BOOKING_REQUEST"
+    assert res_hi["response_language"] == "hi"
+    assert "अपॉइंटमेंट" in res_hi["translated_summary"] or "डॉक्टर" in res_hi["translated_summary"]
+
+    # 3. Offline source fallback for live medical knowledge
+    res_offline = process_patient_request("what is the latest treatment for dengue?")
+    # In test environment without network or when offline, is_live is False and fallback is used
+    if not res_offline.get("is_live"):
+        assert res_offline["is_live"] is False
+        assert isinstance(res_offline.get("sources"), list)
+
 
 
 

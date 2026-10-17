@@ -69,6 +69,20 @@ def _clean_html(raw_html: Optional[str]) -> str:
     return " ".join(text.split())
 
 
+def _extract_search_terms(query: str) -> str:
+    """Extract clean medical search keywords by removing conversational question filler."""
+    cleaned = re.sub(r'[^\w\s]', ' ', query.lower())
+    stop_words = {
+        "what", "is", "the", "are", "a", "an", "for", "to", "in", "of", "on", "with",
+        "latest", "recent", "newest", "current", "guidelines", "protocol", "protocols",
+        "please", "tell", "me", "about", "can", "you", "how", "do", "i", "we", "my"
+    }
+    keywords = [w for w in cleaned.split() if w not in stop_words and len(w) > 1]
+    if keywords:
+        return " ".join(keywords)
+    return query.strip()
+
+
 def _extract_dengue_guidance(summary_text: str) -> str:
     """
     Extract factual dengue treatment guidelines from MedlinePlus / WHO sources:
@@ -167,16 +181,7 @@ def fetch_live_medical_knowledge(query: str, max_results: int = 3) -> Dict[str, 
             except TypeError:
                 return _MOCK_RETRIEVAL_HANDLER(clean_query)
         except Exception as e:
-            return {
-                "success": False,
-                "query": clean_query,
-                "sources": [],
-                "summary": "Current medical information could not be verified due to a retrieval error.",
-                "guidance": ["Consult a licensed healthcare provider for current clinical advice."],
-                "retrieval_timestamp": datetime.now(timezone.utc).isoformat(),
-                "is_live": False,
-                "error": str(e),
-            }
+            return _fallback_offline_knowledge(clean_query, error_reason=str(e))
 
     # 2. Check cache
     now = time.time()
@@ -187,8 +192,8 @@ def fetch_live_medical_knowledge(query: str, max_results: int = 3) -> Dict[str, 
             return entry["data"]
 
     # 3. Live API Retrieval: MedlinePlus Web Service (U.S. National Library of Medicine / NIH)
-    # Official public XML search endpoint: https://wsearch.nlm.nih.gov/ws/query
-    encoded_term = urllib.parse.quote_plus(clean_query)
+    search_term = _extract_search_terms(clean_query)
+    encoded_term = urllib.parse.quote_plus(search_term)
     api_url = f"https://wsearch.nlm.nih.gov/ws/query?db=healthTopics&term={encoded_term}&retmax={max_results}"
 
     retrieval_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
